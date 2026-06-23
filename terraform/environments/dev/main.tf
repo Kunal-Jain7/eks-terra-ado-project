@@ -15,7 +15,7 @@ module "network" {
 module "iam" {
   source = "../../modules/iam"
 
-  project_name = var.projectt_name
+  project_name = var.project_name
   environment  = var.environment
   tags         = var.tags
 }
