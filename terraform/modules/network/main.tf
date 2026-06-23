@@ -88,4 +88,79 @@ resource "aws_subnet" "private_subnet" {
 # ---------------------------------------------------------------------------
 # NAT Gateway(s)
 # ---------------------------------------------------------------------------
+resource "aws_eip" "client_nat" {
+  for_each = local.nat_keys
 
+  domain = "vpc"
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-${var.environment}-nat-eip-${each.key}"
+  })
+
+  depends_on = [aws_internet_gateway.client_ig]
+}
+
+resource "aws_nat_gateway" "client_nat" {
+  for_each = local.nat_keys
+
+  allocation_id = aws_eip.client_nat[each.key].id
+  subnet_id     = var.single_nat_gateway ? aws_subnet_public[var.availability_zones[0]].id : aws_subnet.public_subnet[each.key].id
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-${var.environment}-natgtw-${each.key}"
+  })
+
+  depends_on = [aws_internet_gateway.client_ig]
+}
+
+# ---------------------------------------------------------------------------
+# Route tables - public
+# ---------------------------------------------------------------------------
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.client_vpc.id
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-${var.environment}-public-rt"
+  })
+}
+
+resource "aws_route" "public_internet" {
+  route_table_id         = aws_route_table.public_rt.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.client_ig.id
+}
+
+resource "aws_route_table_association" "public_assoc" {
+  for_each = aws_subnet.public_subnet
+
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+# ---------------------------------------------------------------------------
+# Route tables - private (one per NAT key: per-AZ, or a single shared one)
+# ---------------------------------------------------------------------------
+resource "aws_route_table" "private-rt" {
+  for_each = local.nat_keys
+
+  vpc_id = aws_vpc.client_vpc.id
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-${var.environment}-private-rt-${each.key}"
+  })
+}
+
+resource "aws_route" "private_nat" {
+  for_each = aws_route_table.private-rt
+
+  route_table_id         = each.value.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.client_nat[each.key].id
+}
+
+resource "aws_route_table_association" "private_assoc" {
+  for_each = aws_subnet.private_subnet
+
+  subnet_id      = each.value.id
+  route_table_id = var.single_nat_gateway ? aws_route_table.private-rt["single"].id : aws_route_table.private-rt[each.key].id
+}
