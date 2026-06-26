@@ -69,3 +69,22 @@ module "nodegroups" {
   ebs_kms_key_arn        = module.security.ebs_kms_key_arn
   tags                   = var.tags
 }
+
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  project_name      = var.project_name
+  environment       = var.environment
+  cluster_name      = module.eks.cluster_name
+  oidc_provider_arn = module.eks.oidc_provider_arn
+  oidc_provider_url = module.eks.oidc_provider_url
+
+  log_retention_days         = var.log_retention_days
+  alarm_email                = var.alarm_email
+  cpu_alarm_threshold        = var.cpu_alarm_threshold
+  memory_alarm_threshold     = var.memory_alarm_threshold
+  filesystem_alarm_threshold = var.filesystem_alarm_threshold
+  pod_restart_threshold      = var.pod_restart_threshold
+
+  tags = var.tags
+}

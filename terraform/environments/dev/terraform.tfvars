@@ -54,3 +54,11 @@ node_group_name_suffix = "general"
 node_instance_type     = "c7i-flex.large"
 node_max_size          = 4
 node_min_size          = 1
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
+log_retention_days         = 30
+alarm_email                = "kunal70223@gmail.com" # set to "you@example.com" to receive alerts
+cpu_alarm_threshold        = 80
+memory_alarm_threshold     = 80
+filesystem_alarm_threshold = 85
+pod_restart_threshold      = 5

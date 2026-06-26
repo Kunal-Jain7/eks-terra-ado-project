@@ -132,3 +132,42 @@ variable "node_max_size" {
   description = "Maximum number of worker nodes (supports upgrade surge + autoscaling)"
   default     = 4
 }
+
+# ── Monitoring ───────────────────────────────────────────────────────────────
+variable "log_retention_days" {
+  type        = number
+  default     = 30
+  description = "CloudWatch log retention in days"
+}
+
+variable "alarm_email" {
+  type        = string
+  default     = "kunal70223@gmail.com"
+  description = "Email address for CloudWatch alarm SNS notifications. Set to null to skip."
+}
+
+variable "cpu_alarm_threshold" {
+  type        = number
+  description = "Node CPU % threshold for alarm"
+  default     = 80
+}
+
+variable "memory_alarm_threshold" {
+  type        = number
+  description = "Node Memory % threshold for alarm"
+  default     = 80
+}
+
+variable "filesystem_alarm_threshold" {
+  type        = number
+  description = "Node Filesystem % threshold for alarm"
+  default     = 85
+}
+
+variable "pod_restart_threshold" {
+  type        = number
+  default     = 5
+  description = "Pod restart count threshold per alarm period"
+}
+
+

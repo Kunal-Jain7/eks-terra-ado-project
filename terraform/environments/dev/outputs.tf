@@ -97,3 +97,22 @@ output "kubeconfig_command" {
   description = "Run this after apply to update your local kubeconfig"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
 }
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
+
+output "control_plane_log_group_name" {
+  value = module.monitoring.control_plane_log_group_name
+}
+
+output "container_insights_log_group_name" {
+  value = module.monitoring.container_insights_log_group_name
+}
+
+output "sns_topic_arn" {
+  value = module.monitoring.sns_topic_arn
+}
+
+output "dasboard_url" {
+  description = "Open this URL in your browser to view the cluster health dashboard"
+  value       = module.monitoring.dashboard_url
+}

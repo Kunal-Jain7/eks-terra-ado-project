@@ -33,12 +33,12 @@ resource "aws_iam_role" "cluster_role" {
 
 resource "aws_iam_role_policy_attachment" "cluster_policy" {
   role       = aws_iam_role.cluster_role.name
-  policy_arn = "arn:aws:iam:aws:policy/AmazonEKSClusterPolicy"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
 resource "aws_iam_role_policy_attachment" "cluster_vpc_resource_controller" {
   role       = aws_iam_role.cluster_role.name
-  policy_arn = "arn:aws:iam:aws:policy/AmazonEKSVVPCResourceController"
+  policy_arn = "arn:aws:iam:aws::policy/AmazonEKSVVPCResourceController"
 }
 
 # ---------------------------------------------------------------------------
@@ -64,23 +64,23 @@ resource "aws_iam_role" "node_role" {
 
 resource "aws_iam_role_policy_attachment" "node_worker_policy" {
   role       = aws_iam_role.node_role.name
-  policy_arn = "arn:aws:iam:aws:policy/AmazonEKSWorkerNodePolicy"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
 }
 
 resource "aws_iam_role_policy_attachment" "node_cni_policy" {
   role       = aws_iam_role.node_role.name
-  policy_arn = "arn:aws:iam:aws:policy/AmazonEKS_CNI_Policy"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
 resource "aws_iam_role_policy_attachment" "node_ecr_readonly" {
   role       = aws_iam_role.node_role.name
-  policy_arn = "arn:aws:iam:aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
 # SSM (not SSH) for break-glass node access - no inbound port 22 needed anywhere.
 resource "aws_iam_role_policy_attachment" "node_ssm" {
   role       = aws_iam_role.node_role.name
-  policy_arn = "arn:aws:iam:aws:policy/AmazonSSMManagedInstanceCore"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_iam_instance_profile" "node_instanceprof" {
