@@ -13,7 +13,7 @@
 ###      `terraform init -backend-config=backend.hcl` in each environment.
 
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.15.6"
 
   required_providers {
     aws = {
