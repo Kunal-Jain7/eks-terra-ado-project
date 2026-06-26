@@ -1,3 +1,5 @@
+# ── Network ──────────────────────────────────────────────────────────────────
+
 output "vpc_id" {
   value = module.network.vpc_id
 }
@@ -14,6 +16,8 @@ output "nat_gateways_ids" {
   value = module.network.nat_gateway_ids
 }
 
+# ── IAM ───────────────────────────────────────────────────────────────────────
+
 output "cluster_role_arn" {
   value = module.iam.cluster_role_arn
 }
@@ -25,6 +29,8 @@ output "node_role_arn" {
 output "node_instance_profile_name" {
   value = module.iam.node_instance_profile_name
 }
+
+# ── Security ──────────────────────────────────────────────────────────────────
 
 output "nodes_security_group_id" {
   value = module.security.nodes_security_group_id
@@ -40,4 +46,54 @@ output "eks_secrets_kms_key_arn" {
 
 output "ebs_kms_key_arn" {
   value = module.security.ebs_kms_key_arn
+}
+
+# ── EKS ───────────────────────────────────────────────────────────────────────
+
+output "cluster_name" {
+  value = module.eks.cluster_name
+}
+
+output "cluster_endpoint" {
+  value = module.eks.cluster_endpoint
+}
+
+output "cluster_certificate_authority_data" {
+  value     = module.eks.cluster_certificate_authority_data
+  sensitive = true
+}
+
+output "cluster_version" {
+  value = module.eks_cluster_version
+}
+
+output "oidc_provider_arn" {
+  value       = module.eks.oidc_provider_arn
+  description = "OIDC provider ARN — needed when creating IRSA roles for controllers"
+}
+
+output "oidc_provider_url" {
+  value       = module.ekd_oidc_provider_url
+  description = "OIDC provider URL (without https://) — used in IAM trust policy conditions"
+}
+
+output "cluster_security_group_id" {
+  value = module.eks.cluster_security_group_id
+}
+
+# ── Node group ────────────────────────────────────────────────────────────────
+
+output "node_group_name" {
+  value = module.nodegroup.node_group_name
+}
+
+output "node_group_status" {
+  value = module.nodegroup.node_group_status
+}
+
+# ── Convenience: kubeconfig update command ────────────────────────────────────
+
+output "kubeconfig_command" {
+  description = "Run this after apply to update your local kubeconfig"
+  value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
 }

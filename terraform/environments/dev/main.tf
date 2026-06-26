@@ -30,3 +30,42 @@ module "security" {
   admin_access_cidrs = var.admin_access_cidrs
   tags               = var.tags
 }
+
+module "eks" {
+  source = "../../modules/eks"
+
+  cluster_name       = var.cluster_name
+  kubernetes_version = var.kubernetes_version
+  cluster_role_arn   = module.iam.cluster_role_arn
+
+  # Pass the whole iam module so Terraform waits for policy attachments
+  # before attempting cluster creation
+  cluster_role_policy_dependency = module.iam
+
+  subnet_ids                           = module.network.private_subnet_ids
+  node_security_group_id               = module.security.nodes_security_group_id
+  cluster_additional_security_group_id = module.security.cluster_additional_security_group_id
+  kms_key_arn                          = module.security.ebs_kms_key_arn
+
+  endpoint_public_access = var.endpoint_public_access
+  public_access_cidrs    = var.public_access_cidrs
+  addon_versions         = var.addon_versions
+
+  tags = var.tags
+}
+
+module "nodegroups" {
+  source = "../../modules/nodegroup"
+
+  cluster_name           = module.eks.cluster_name
+  environment            = var.environment
+  node_group_name_suffix = var.node_group_name_suffix
+  node_role_arn          = module.iam.node_role_arn
+  subnet_ids             = module.network.private_subnet_ids
+  instance_type          = var.node_instance_type
+  desired_size           = var.node_desired_size
+  max_size               = var.node_max_size
+  min_size               = var.node_min_size
+  ebs_kms_key_arn        = module.security.ebs_kms_key_arn
+  tags                   = var.tags
+}

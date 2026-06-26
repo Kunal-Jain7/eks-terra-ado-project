@@ -1,3 +1,5 @@
+# ── General ────────────────────────────────────────────────────────────────
+
 variable "project_name" {
   type        = string
   description = "Project name used in the resources and the tags"
@@ -17,6 +19,13 @@ variable "environment" {
     error_message = "Environment must be one of: dev, qa, prod"
   }
 }
+
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
+
+# ── Network ─────────────────────────────────────────────────────────────────
 
 variable "vpc_cidr" {
   type        = string
@@ -43,10 +52,8 @@ variable "single_nat_gateway" {
   description = "Use a single shared NAT Gateway instead of one per AZ (cost optimization for non-prod)"
 }
 
-variable "cluster_name" {
-  type = string
-}
 
+# ── Security ────────────────────────────────────────────────────────────────
 variable "alb_ingress_cidrs" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
@@ -59,7 +66,69 @@ variable "admin_access_cidrs" {
   default     = []
 }
 
-variable "tags" {
-  type    = map(string)
-  default = {}
+# ── EKS cluster ─────────────────────────────────────────────────────────────
+
+variable "cluster_name" {
+  type = string
+}
+
+variable "kubernetes_version" {
+  type        = string
+  default     = "1.30"
+  description = "Kubernetes version. Intentionally older to exercise the upgrade path."
+}
+
+variable "endpoint_public_access" {
+  type        = bool
+  default     = true
+  description = "Enable public EKS API endpoint access. Set to false for prod hardening."
+}
+
+variable "public_access_cidrs" {
+  type        = list(string)
+  description = "CIDRs permitted to reach the public EKS API endpoint."
+  default     = ["0.0.0.0/0"]
+}
+
+variable "addon_versions" {
+  type        = map(string)
+  description = "Pinned EKS addon versions. Set a value to null to use the EKS-default for the cluster's K8s version."
+  default = {
+    "vpc-cni"            = null
+    "coredns"            = null
+    "kube-rpoxy"         = null
+    "aws-ebs-csi-driver" = null
+  }
+}
+
+# ── Node group ───────────────────────────────────────────────────────────────
+
+variable "node_group_name_suffix" {
+  type        = string
+  description = "Suffix for the node group name"
+  default     = "general"
+}
+
+variable "node_instance_type" {
+  type        = string
+  description = "EC2 instance type for worker nodes"
+  default     = "c7i-flex.large"
+}
+
+variable "node_desired_size" {
+  type        = number
+  description = "Desired number of worker nodes"
+  default     = 2
+}
+
+variable "node_min_size" {
+  type        = number
+  default     = 4
+  description = "Minimum number of worker nodes"
+}
+
+variable "node_max_size" {
+  type        = number
+  description = "Maximum number of worker nodes (supports upgrade surge + autoscaling)"
+  default     = 4
 }

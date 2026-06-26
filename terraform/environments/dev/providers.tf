@@ -6,6 +6,12 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    # tls provider is needed by modules/eks to fetch the OIDC certificate
+    # thumbprint dynamically at plan/apply time
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
