@@ -13,15 +13,3 @@ variable "tags" {
   default     = {}
   description = "Additional resources tags"
 }
-
-variable "oidc_issuer_url" {
-  type        = string
-  description = "EKS Cluster OIDS issuer URL"
-  default     = null
-}
-
-variable "oidc_thumbprint" {
-  type        = string
-  description = "SHA1 thumbprint of the OIDC issuer's TLS Certificate. Required when oidc_issuer is set"
-  default     = null
-}

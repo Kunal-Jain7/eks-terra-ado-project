@@ -29,5 +29,4 @@ module "security" {
   alb_ingress_cidrs  = var.alb_ingress_cidrs
   admin_access_cidrs = var.admin_access_cidrs
   tags               = var.tags
-
 }

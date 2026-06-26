@@ -41,31 +41,6 @@ resource "aws_security_group_rule" "nodes_self_egress" {
   description       = "Unrestricted egress (Image Pulls, API calls, DNS via NAT )"
 }
 
-# Gated: created once cluster_security_group_id is supplied (Phase 4)
-resource "aws_security_group_rule" "nodes_ingress_https_from_cluster" {
-  count = var.cluster_security_group_id != null ? 1 : 0
-
-  type                     = "ingress"
-  from_port                = 443
-  to_port                  = 443
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.eks_sg.id
-  source_security_group_id = var.cluster_security_group_id
-  description              = "Control plane to node HTTPS"
-}
-
-resource "aws_security_group_rule" "nodes_ingress_kubelet_from_cluster" {
-  count = var.cluster_security_group_id != null ? 1 : 0
-
-  type                     = "ingress"
-  from_port                = 10250
-  to_port                  = 10250
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.eks_sg.id
-  source_security_group_id = var.cluster_security_group_id
-  description              = "Control Plane to kubelet"
-}
-
 # ---------------------------------------------------------------------------
 # ALB / ingress load balancer security group
 # ---------------------------------------------------------------------------

@@ -90,15 +90,3 @@ resource "aws_iam_instance_profile" "node_instanceprof" {
   tags = var.tags
 }
 
-# ---------------------------------------------------------------------------
-# OIDC provider for IRSA - created only once oidc_issuer_url is supplied
-# ---------------------------------------------------------------------------
-resource "aws_iam_openid_connect_provider" "open_id" {
-  count = var.oidc_issuer_url != null ? 1 : 0
-
-  url             = var.oidc_issuer_url
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [var.oidc_thumbprint]
-
-  tags = var.tags
-}

@@ -22,6 +22,3 @@ output "node_instance_profile_arn" {
   value = aws_iam_instance_profile.node_instanceprof.arn
 }
 
-output "oidc_provider_arn" {
-  value = length(aws_iam_openid_connect_provider.open_id) > 0 ? aws_iam_openid_connect_provider.open_id[0].arn : null
-}

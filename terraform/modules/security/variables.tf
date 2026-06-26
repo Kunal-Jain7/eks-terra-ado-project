@@ -25,12 +25,6 @@ variable "admin_access_cidrs" {
   default     = []
 }
 
-variable "cluster_security_group_id" {
-  type        = string
-  description = "EKS cluster's auto-created security group ID. Leave null until the EKS cluster exists."
-  default     = null
-}
-
 variable "tags" {
   type        = map(string)
   default     = {}
