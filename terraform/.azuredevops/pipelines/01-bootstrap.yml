@@ -248,11 +248,15 @@ stages:
         workingDirectory: $(TF_DIR)
         script: |
           set -euo pipefail
+
+          echo "=== Downloaded artifacts ==="
+          ls -R "$(Build.ArtifactStagingDirectory)"
+
           echo "=== Terraform Apply ==="
           terraform apply \
             input=false \
             -auto-approve \
-            "$(Build.ArtifactStagingDirectory)/tfplan.binary"
+            "$(Build.ArtifactStagingDirectory)/tfplan/tfplan.binary"
 
           echo ""
           echo "Apply Complete."
