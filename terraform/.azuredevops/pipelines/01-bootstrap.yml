@@ -287,21 +287,24 @@ stages:
         script: |
           set -euo pipefail
 
-          # Re-init to read local state and print outputs
-          terraform init -backend=false -input=false -reconfigure > /dev/null
+          echo "=== Fetching backend resource names from AWS ==="
+          BUCKET=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name,'eksplat-terraform-state')].Name" \
+            --output text)
 
+          TABLE=$(aws dynamodb list-tables \
+            --query "TableNames[?starts_with(@,'eksplat-terraform-locks')]" \
+            --output text)
+
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           echo ""
           echo "============================================================"
           echo " STATE BACKEND OUTPUTS "
           echo "============================================================"
-          terraform output
-
-          # Extract values to display the exact next-step instructions
-          BUCKET=$(terraform output -raw state_bucket_name)
-          TABLE=$(terraform output -raw lock_table_name)
-          KMS=$(terraform output -raw kms_key_arn)
-          REGION=$(AWS_REGION)
-
+          echo "  TF_STATE_BUCKET         = $BUCKET"
+          echo "  TF_STATE_LOCK_TABLE     = $TABLE"
+          echo "  AWS_ACCOUNT_ID          = $ACCOUNT_ID"
+          echo "  TF_STATE_REGION         = $(AWS_REGION)"
           echo ""
           echo "============================================================"
           echo "  NEXT STEPS - COMPLETE BEFORE RUNNING PIPELINE 2"
@@ -320,8 +323,6 @@ stages:
           echo "   terraform/environments/qa/backend.hcl"
           echo "   terraform/environments/prod/backend.hcl"
           echo ""
-          echo "   Replace <ACCOUNT_ID> in each file with your account ID:"
-          echo "   $(aws sts get-caller-identity --query Account --output text)"
           echo ""
           echo "3. Commit and push the updated backend.hcl files."
           echo ""
@@ -332,17 +333,21 @@ stages:
           echo "============================================================"
           echo ""
           echo "Verifying S3 bucket exists and is encrypted..."
-          aws s3api get-bucket-versioning --bucket "$BUCKET" \
-            --query 'Status' --output text
 
-          aws s3api get-bucket-encryption --bucket "$BUCKET" \
+          BUCKET_STATUS=$(aws s3api get-bucket-versioning \
+            --bucket "$BUCKET" --query 'STATUS' --output text)
+          echo "S3 Versioning : $BUCKET_STATUS"
+
+          ENCRYPT_ALGO=$(aws s3api get-bucket-encryption --bucket "$BUCKET" \
             --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm' \
-            -- output text
+            --output text)
+          echo "S3 encryption: $ENCRYPT_ALGO"
 
           echo ""
           echo "Verifying DYnamoDB table exists..."
-          aws dynamodb describe-table --table-name "$TABLE" \
-            --query 'Table.TableStatus' --output text
+          TABLE_STATUS=$(aws dynamodb describe-table --table-name "$TABLE" \
+            --query 'Table.TableStatus' --output text)
+          echo "DynamoDB status : $TABLE_STATUS"
 
           echo ""
           echo "All backend resources confirmed. Bootstrap Completed."
