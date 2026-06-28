@@ -1,0 +1,348 @@
+# Pipeline 1 of 4 — Terraform State Backend Bootstrap
+
+# PURPOSE:
+#   This pipeline is run ONCE to create the S3 bucket and DynamoDB table
+#   that every other pipeline depends on for Terraform remote state storage.
+#   It uses LOCAL state (no backend config needed) because it IS the thing
+#   that creates the remote backend.
+
+# RUN ORDER:
+#   01-bootstrap.yml
+#   02-infrastructure.yml
+#   03-app-deploy.yml
+#   04-upgrade.yml
+
+# AFTER THIS PIPELINE COMPLETES:
+#   1. Note the "State Backend Outputs" printed in the Apply stage.
+#   2. Go to Azure DevOps → Pipelines → Library → eksplat-terraform-backend
+#   3. Set TF_STATE_BUCKET to the printed bucket name.
+#   4. Then run pipeline 02-infrastructure.yml.
+#
+# TRIGGER: Manual only. Never triggered by code push.
+
+trigger: none
+pr: none
+
+# ── Agent pool ───────────────────────────────────────────────────────────────
+pool:
+  name: databricks-ec2
+  demands:
+  - agent.name -equals databricks
+
+# ── Variable groups ──────────────────────────────────────────────────────────
+
+variables:
+- group: eksplat-aws-credentials
+  name: TF_DIR
+  value: 'terraform/global/bootstrap'
+- name: TF_VERSION
+  value: '1.15.6'
+
+# ── Stages ───────────────────────────────────────────────────────────────────
+stages:
+# ── Stage 1: Validate ──────────────────────────────────────────────────────
+- stage: Validate
+  displayName: '1 · Validate'
+  jobs:
+  - job: TerraformValidate
+    displayName: 'Terraform Format check + Validate'
+    steps:
+    - cheeckout: self
+      displayName: 'Checkout repository'
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Terraform fmt Check'
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          echo "== Checking Terraform Formatting =="
+          terraform fmt -check -recursive -diff .
+          echo "Format Check Passed..."
+
+    - task: Bash@3
+      displayName: 'Terraform Init'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          echo "=== Terraform init (Local-state --- no backend config) ===="
+          # -backend=false because this run uses local state intentionally.
+          # The bootstrap module IS the thing that creates the remote backend.
+          terraform init -backend=false -input=false
+          echo "Init Complete"
+
+    - task: Bash@3
+      displayName: 'Terraform validate'
+      inputs:
+        targetType: inline
+        workinfDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          echo "=== Terraform Validate ==="
+          terraform validate
+          echo "Validation Passed successfully."
+
+# ── Stage 2: Plan ──────────────────────────────────────────────────────────
+- stage: Plan
+  displayName: '2 · Plan'
+  dependsOn: Validate
+  condition: succeeded()
+  jobs:
+  - job: TerraformPlan
+    displayName: 'Terraform Plan'
+    steps:
+    - checkout: self
+      displayName: 'Checkout repository'
+
+    - templates: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Terraform Init'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          echo "=== Terraform init (Local-state --- no backend config) ===="
+          # -backend=false because this run uses local state intentionally.
+          # The bootstrap module IS the thing that creates the remote backend.
+          terraform init -backend=false -input=false
+          echo "Init Complete"
+
+    - task: Bash@3
+      displayName: 'Terraform Plan'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipelfail
+
+          echo "=== Terraform Plan ==="
+          # Save binary plan for apply stage and human-readable text for review
+          terraform plan \
+            -input=false \
+            -out="$(Build.ArtifactStagingDirectory)/tfplan.binary" \
+            -var-file="terraform.tfvars"
+
+          echo ""
+          echo "=== Saving Human Readable plan Output ==="
+          terraform show -no-color "$(Build.ArtifactStagingDirectory)/tfplan.binary" \
+            > "$(Build.ArtifactStagingDirectory)/plan-output.txt"
+
+          echo ""
+          echo "=== Plan Summary ==="
+          echo "Resources to be created:"
+          grep -E "^ # |will be created|must be replaced|will be destroyed" \
+            "$(Build.ArtifactStagingDirectory)/plan-output.txt" || true
+
+          echo ""
+          echo "Plan Saved. Review the artifact: 'tfplan/plan-output.txt' before approving"
+
+    # Publish the plan artifacts so the approver can review them
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish plan artifacts'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: 'tfplan'
+        publishLocation: 'pipeline'
+
+# ── Stage 3: Approve ───────────────────────────────────────────────────────
+- stage: Approve
+displayName: '3 · Approve'
+dependsOn: Plan
+condition: succeeded()
+jobs:
+- job: WaitforApproval
+  displayName: 'Mannual Approval gate'
+  # This job runs on the Azure DevOps server (not your agent) —
+  # it simply pauses the pipeline and waits for a human to approve.
+  pool: server
+  timeoutInMinutes: 1440
+  steps:
+  - task: ManualValidation@0
+    displayName: 'Review Plan and Approve'
+    timeoutInMinutes: 1440
+    inputs:
+      notifyUsers: |
+        $(Build.RequestedForEmail)
+      instructions:
+        ============================================================
+        TERRAFORM BOOTSTRAP - PENDING APPROVAL
+        ============================================================
+
+        THIS PLAN WILL CREATE THE FOLLOWING AWS RESOURCES:
+          • S3 bucket  — Terraform remote state storage (KMS encrypted, versioned)
+          • DynamoDB   — State locking table
+          • KMS key    — Encrypts state bucket and DynamoDB
+
+        To review the full plan before approving:
+          Pipelines -> This run -> Artifacts -> tfplan/plan-output.txt
+
+        Once Approved, resources will be created immediately.
+        This pipeline runs once - rerunning it is safe but
+        Unnecessary.  
+        ============================================================
+      onTimeout: 'reject'
+
+# ── Stage 4: Apply ─────────────────────────────────────────────────────────
+- stage: Apply
+  displayName: '4 · Apply'
+  dependsOn: Approve
+  condition: succeeded()
+  jobs:
+    - job: TerraformApply
+      displayName: 'Terraform Apply'
+      steps:
+        - checkout: self
+          displayName: 'Checkout Repository'
+
+        - template: ../templates/configure-aws.yml
+
+        # Download the plan artifact published in Stage 2
+        - task: DownloadPipelineArtifact@2
+          displayName: 'Download Plan Artifact'
+          inputs:
+            artifact: 'tfplan'
+            path: '$(Build.ArtifactStagingDirectory)'
+
+        - task: Bash@3
+          displayName: 'Terraform Init'
+          env: 
+            AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+            AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+            AWS_REGION: $(AWS_REGION)
+          inputs:
+            targetType: inline
+            workingDirectory: $(TF_DIR)
+            script: |
+              set -euo pipefail
+              # Re-init in the Apply job's workspace.
+              # The binary plan file will be used directly — no re-plan.
+              terraform init -backend=false -input=false
+
+        - task: Bash@3
+          displayName: 'Terraform Apply'
+          env: 
+            AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+            AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+            AWS_REGION: $(AWS_REGION)
+          inputs:
+            targetType: inline
+            workingDirectory: $(TF_DIR)
+            script: |
+              set -euo pipefail
+              echo "=== Terraform Apply ==="
+              terraform apply \
+                input=false \
+                -auto-approve \
+                "$(Build.ArtifactStagingDirectory)/tfplan.binary"
+
+              echo ""
+              echo "Apply Complete."
+
+ # ── Stage 5: Output ────────────────────────────────────────────────────────
+- stage: Output
+  displayName: '5 · OutPuts'
+  dependsOn: Apply
+  condition: succeeded()
+  jobs:
+    - job: Print Outputs
+      displayName: 'Print Backend details + next steps'
+      steps:
+        - checkout: self
+          displayName: 'Checkout Repository'
+
+        - template: ../templates/configure-aws.yml
+
+        - task: Bash@3
+          displayName: 'Terraform outputs + next steps instructions'
+          env:
+            AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+            AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+            AWS_REGION: $(AWS_REGION)
+          inputs:
+            targetType: inline
+            workingDirectory: $(TF_DIR)
+            script: |
+              set -euo pipefail
+
+              # Re-init to read local state and print outputs
+              terraform init -backend=false -input=false -reconfigure > /dev/null
+
+              echo ""
+              echo "============================================================"
+              echo " STATE BACKEND OUTPUTS "
+              echo "============================================================"
+              terraform output
+
+              # Extract values to display the exact next-step instructions
+              BUCKET=$(terraform output -raw state_bucket_name)
+              TABLE=$(terraform output -raw lock_table_name)
+              KMS=$(terraform output -raw kms_key_arn)
+              REGION=$(AWS_REGION)
+
+              echo ""
+              echo "============================================================"
+              echo "  NEXT STEPS - COMPLETE BEFORE RUNNING PIPELINE 2"
+              echo "============================================================"
+              echo ""
+              echo "1. Go to Azure DevOps → Pipelines → Library"
+              echo "  → Variable Group: eksplat-terraform-backend"
+              echo "Set the following values:"
+              echo ""
+              echo "   TF_STATE_BUCKET    = $BUCKET"
+              echo "   TF_STATE_LOCK_TABLE = $TABLE"
+              echo "   TF_STATE_REGION    = $REGION"
+              echo ""
+              echo "2. Update each environment's backend.hcl:"
+              echo "   terraform/environments/dev/backend.hcl"
+              echo "   terraform/environments/qa/backend.hcl"
+              echo "   terraform/environments/prod/backend.hcl"
+              echo ""
+              echo "   Replace <ACCOUNT_ID> in each file with your account ID:"
+              echo "   $(aws sts get-caller-identity --query Account --output text)"
+              echo ""
+              echo "3. Commit and push the updated backend.hcl files."
+              echo ""
+              echo "4. Run Pipeline 2 — 02-infrastructure.yml"
+              echo ""
+              echo "============================================================"
+              echo "    VERIFICATION   "
+              echo "============================================================"
+              echo ""
+              echo "Verifying S3 bucket exists and is encrypted..."
+              aws s3api get-bucket-versioning --bucket "$BUCKET" \
+                --query 'Status' --output text
+
+              aws s3api get-bucket-encryption --bucket "$BUCKET" \
+                --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm' \
+                -- output text
+
+              echo ""
+              echo "Verifying DYnamoDB table exists..."
+              aws dynamodb describe-table --table-name "$TABLE" \
+                --query 'Table.TableStatus' --output text
+
+              echo ""
+              echo "All backend resources confirmed. Bootstrap Completed."
+          
+              
+
+            

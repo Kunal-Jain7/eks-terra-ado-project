@@ -1,0 +1,34 @@
+# .azuredevops/templates/configure-aws.yml
+#
+# Reusable step template: configures AWS CLI credentials from pipeline
+# variable group secrets and verifies the identity before any Terraform
+# command runs.
+#
+# Usage (in a steps: block):
+#   - template: ../templates/configure-aws.yml
+#
+# Required pipeline variables (from variable group eksplat-aws-credentials):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+
+steps:
+  - task: Bash@3
+    displayName: 'Configure AWS Credentials'
+    env:
+      AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+      AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+      AWS_REGION: $(AWS_REGION)
+    inputs:
+      targetType: inline
+      script: |
+        set -euo pipefail
+
+        echo "Configuring AWS CLI..."
+        aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+        aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
+        aws configure set region $AWS_REGION
+        aws configure set output "json"
+
+        echo ""
+        echo "===== Verifying AWS Identity  ======"
+        aws sts get-caller-identity
+        echo "AWS configuration verified"
