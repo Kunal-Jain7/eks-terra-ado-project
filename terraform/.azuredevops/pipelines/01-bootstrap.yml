@@ -254,9 +254,9 @@ stages:
 
           echo "=== Terraform Apply ==="
           terraform apply \
-            input=false \
+            -input=false \
             -auto-approve \
-            "$(Build.ArtifactStagingDirectory)/tfplan/tfplan.binary"
+            "$(Build.ArtifactStagingDirectory)/tfplan.binary"
 
           echo ""
           echo "Apply Complete."
