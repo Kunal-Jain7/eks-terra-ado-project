@@ -132,7 +132,7 @@ stages:
         targetType: inline
         workingDirectory: $(TF_DIR)
         script: |
-          set -euo pipelfail
+          set -euo pipefail
 
           echo "=== Terraform Plan ==="
           # Save binary plan for apply stage and human-readable text for review
