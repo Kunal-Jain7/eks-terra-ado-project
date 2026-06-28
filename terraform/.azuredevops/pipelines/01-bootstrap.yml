@@ -263,7 +263,7 @@ stages:
   dependsOn: Apply
   condition: succeeded()
   jobs:
-  - job: Print Outputs
+  - job: PrintOutputs
     displayName: 'Print Backend details + next steps'
     steps:
     - checkout: self
