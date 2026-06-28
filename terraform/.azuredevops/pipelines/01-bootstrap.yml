@@ -165,41 +165,41 @@ stages:
 
 # ── Stage 3: Approve ───────────────────────────────────────────────────────
 - stage: Approve
-displayName: '3 · Approve'
-dependsOn: Plan
-condition: succeeded()
-jobs:
-- job: WaitforApproval
-  displayName: 'Mannual Approval gate'
-  # This job runs on the Azure DevOps server (not your agent) —
-  # it simply pauses the pipeline and waits for a human to approve.
-  pool: server
-  timeoutInMinutes: 1440
-  steps:
-  - task: ManualValidation@0
-    displayName: 'Review Plan and Approve'
-    timeoutInMinutes: 1440
-    inputs:
-      notifyUsers: |
-        $(Build.RequestedForEmail)
-      instructions:
-        ============================================================
-        TERRAFORM BOOTSTRAP - PENDING APPROVAL
-        ============================================================
+  displayName: '3 · Approve'
+  dependsOn: Plan
+  condition: succeeded()
+  jobs:
+    - job: WaitforApproval
+      displayName: 'Mannual Approval gate'
+      # This job runs on the Azure DevOps server (not your agent) —
+      # it simply pauses the pipeline and waits for a human to approve.
+      pool: server
+      timeoutInMinutes: 1440
+      steps:
+        - task: ManualValidation@0
+          displayName: 'Review Plan and Approve'
+          timeoutInMinutes: 1440
+          inputs:
+            notifyUsers: |
+              $(Build.RequestedForEmail)
+            instructions:
+              ============================================================
+              TERRAFORM BOOTSTRAP - PENDING APPROVAL
+              ============================================================
 
-        THIS PLAN WILL CREATE THE FOLLOWING AWS RESOURCES:
-          • S3 bucket  — Terraform remote state storage (KMS encrypted, versioned)
-          • DynamoDB   — State locking table
-          • KMS key    — Encrypts state bucket and DynamoDB
+              THIS PLAN WILL CREATE THE FOLLOWING AWS RESOURCES:
+              • S3 bucket  — Terraform remote state storage (KMS encrypted, versioned)
+              • DynamoDB   — State locking table
+              • KMS key    — Encrypts state bucket and DynamoDB
 
-        To review the full plan before approving:
-          Pipelines -> This run -> Artifacts -> tfplan/plan-output.txt
+              To review the full plan before approving:
+               Pipelines -> This run -> Artifacts -> tfplan/plan-output.txt
 
-        Once Approved, resources will be created immediately.
-        This pipeline runs once - rerunning it is safe but
-        Unnecessary.  
-        ============================================================
-      onTimeout: 'reject'
+              Once Approved, resources will be created immediately.
+              This pipeline runs once - rerunning it is safe but
+              Unnecessary.  
+              ============================================================
+            onTimeout: 'reject'
 
 # ── Stage 4: Apply ─────────────────────────────────────────────────────────
 - stage: Apply
