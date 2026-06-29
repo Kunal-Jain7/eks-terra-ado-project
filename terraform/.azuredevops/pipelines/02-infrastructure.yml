@@ -348,6 +348,10 @@ stages:
 
     - template: ../templates/configure-aws.yml
 
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
     - task: Bash@3
       displayname: 'Update KubeConfig'
       env:
