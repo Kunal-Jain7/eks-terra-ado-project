@@ -1,0 +1,56 @@
+# .azuredevops/templates/kubectl-install.yml
+#
+# Reusable step template: ensures kubectl is installed at a version
+# compatible with the target EKS cluster. kubectl supports ±1 minor
+# version skew from the cluster, so 1.30.x kubectl works with a 1.30
+# EKS cluster (and will still work after a 1.31 upgrade).
+#
+# Usage (in a steps: block):
+#   - template: ../templates/kubectl-install.yml
+#     parameters:
+#       kubectlVersion: '1.30.0'   # optional, defaults below
+
+parameters:
+  - name: kubectlVersion
+    type: string
+    default: '1.30.0'
+
+steps:
+  - task: Bash@3
+    displayName: 'Install / verify kubectl v${{ parameters.kubectlVersion }}'
+    inputs:
+      targetType: inline
+      script: |
+        set -euo pipefail
+
+        REQUIRED_VERSION="${{ parameters.kubectlVersion }}"
+
+        if command -v kubectl &>/dev/null; then
+          INSTALLED=$(kubectl version --client -o json \
+            | python3 -c "import sys,json; v=json.load(sys.stdin)['clientVersion']; \
+              print(f\"{v['major']}.{v['minor'].rstrip('+')}\")")
+          REQUIRED_SHORT=$(echo "$REQUIRED_VERSION" | cut -d. -f1,2)
+          if [ "$INSTALLED" = "$REQUIRED_SHORT" ]; then
+            echo "kubectl $REQUIRED_VERSION is already installed."
+            kubectl version --client
+            exit 0
+          else
+            echo "Installed kubectl ($INSTALLED) differs from required ($REQUIRED_SHORT). Reinstalling..."
+          fi
+        fi
+
+        echo "Installing kubectl v$REQUIRED_VERSION..."
+        cd /tmp
+
+        curl -fsSLO "https://dl.k8s.io/release/v${REQUIRED_VERSION}/bin/linux/amd64/kubectl"
+        curl -fsSLO "https://dl.k8s.io/release/v${REQUIRED_VERSION}/bin/linux/amd64/kubectl.sha256"
+
+        echo "$(cat kubectl.sha256) kubectl" | sha256sum --check
+        sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+        rm -f kubectl kubectl.sha256
+
+        echo ""
+        echo "=== kubectl version ==="
+        kubectl version --client
+        echo "kubectl installation complete."
+

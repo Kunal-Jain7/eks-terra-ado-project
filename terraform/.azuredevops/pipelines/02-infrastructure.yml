@@ -1,0 +1,524 @@
+# .azuredevops/pipelines/02-infrastructure.yml
+#
+# Pipeline 2 of 4 — Infrastructure Deployment (dev environment)
+#
+# PURPOSE:
+#   Deploys the complete dev environment via Terraform:
+#   network → IAM → security → EKS cluster → nodegroup → monitoring
+#   Uses the S3 remote backend created by Pipeline 1.
+#
+# PRE-REQUISITES (must be done before running this pipeline):
+#   ✅ Pipeline 1 (01-bootstrap.yml) has completed successfully
+#   ✅ eksplat-terraform-backend variable group has been updated with:
+#        TF_STATE_BUCKET, TF_STATE_LOCK_TABLE, TF_STATE_REGION
+#   ✅ terraform/environments/dev/backend.hcl has been updated with
+#        the real account ID and committed to the repo
+#
+# RUN ORDER:
+#   01-bootstrap.yml      ✅ done
+#   02-infrastructure.yml
+#   03-app-deploy.yml
+#   04-upgrade.yml
+#
+# TRIGGER: Manual only. Can be re-run safely (Terraform is idempotent).
+#          Re-runs on an existing cluster will show no changes unless
+#          Terraform config was modified.
+
+trigger: none
+pr: none
+
+# ── Agent pool ───────────────────────────────────────────────────────────────
+pool:
+  name: databricks-ec2
+  demands:
+  - agent.name -equals databricks
+
+# ── Variable groups ──────────────────────────────────────────────────────────
+
+variables:
+- group: eksplat-aws-credentials
+- group: eksplat-terraform-backend
+- name: TF_DIR
+  value: 'terraform/environments/dev'
+- name: TF_VERSION
+  value: '1.15.6'
+- name: KUBECTL_VERSION
+  value: '1.30.0'
+- name: ENVIRONMENT
+  value: 'dev'
+- name: CLUSTER_NAME
+  value: 'eksplat-dev-eks'
+
+# ── Stages ───────────────────────────────────────────────────────────────────
+stages:
+# ── Stage 1: Validate ──────────────────────────────────────────────────────
+- stage: Validate
+  displayName: '1 · Validate'
+  jobs:
+  - job: TerraformValidate
+    displayName: 'Format Check + Validate'
+    steps:
+    - checkout: self
+      displayName: 'Checkout Repository'
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Terraform fmt check'
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          echo " ==== Checking Terraform formatting ==== "
+          terraform fmt -check -recursive -diff .
+          echo "Format Check Passed"
+
+    - task: Bash@3
+      displayName: 'Terraform init'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          echo "==== Terraform init with remote S3 ===="
+          terraform init \
+            -backend-config="bucket=$(TF_STATE_BUCKET)" \
+            -backend-config="key=$(TF_STATE_KEY_DEV)" \
+            -backend-config="region=$(TF_STATE_REGION)" \
+            -backend-config="dynamodb_table=$(TF_STATE_LOCK_TABLE)" \
+            -backend-config="encrypt=true" \
+            -input=false \
+            -reconfigure
+          echo "Initialize complete"
+
+    - task: Bash@3
+      displayName: 'Terraform Validate'
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          echo "==== Terraform Validate ===="
+          terraform validate
+          echo "Validation Passed Successfully."
+
+# ── Stage 2: Plan ──────────────────────────────────────────────────────────
+- stage: Plan
+  displayName: '2 · Plan'
+  dependsOn: Validate
+  condition: succeeded()
+  jobs:
+  - job: TerraformPlan
+    displayName: 'Terraform Plan'
+    steps:
+    - checkout: self
+      displayName: 'Checkout Repository'
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Terraform init with remote backend'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          terraform init \
+            -backend-config="bucket=$(TF_STATE_BUCKET)" \
+            -backend-config="key=$(TF_STATE_KEY_DEV)" \
+            -backend-config="region=$(TF_STATE_REGION)" \
+            -backend-config="dynamodb_table=$(TF_STATE_LOCK_TABLE)" \
+            -backend-config="encrypt=true" \
+            -input=false \
+            -reconfigure
+
+    - task: Bash@3
+      displayName: 'Terraform Plan'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+      script: |
+        set -euo pipefail
+
+        echo "==== Terraform Plan ===="
+        terraform plan \
+          -input=false \
+          -var-file="terraform.tfvars" \
+          -out="$(Build.ArtifactStagingDirectory)/tfplan.binary"
+
+        echo ""
+        echo "=== Saving human-readable plan ==="
+        terraform show -no-color \
+          "$(Build.ArtifactStagingDirectory)/tfplan.binary" \
+          > "$(Build.ArtifactStagingDirectory)/plan-output.txt"
+
+        echo ""
+        echo "==== Plan Summary ===="
+        echo "---- Resources to Add ----"
+        grep "will be created" \
+          "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
+          | xargs -I{} echo "  {} resource(s) to create"
+
+        grep "will be destroyed" \
+          "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
+          | xargs -I{} echo "  {} resource(s) to destroy"
+
+        grep "will be updated in-place\|must be replaced" \
+          "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
+          | xargs -I{} echo "  {} resource(s) to change"
+
+        echo ""
+        echo "Review Artifact 'tfplan/plan-output.txt' before approving"
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Plan Artifacts'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: 'tfplan'
+        publishLocation: 'pipeline'
+
+# ── Stage 3: Approve ───────────────────────────────────────────────────────
+
+- stage: Approve
+  displayName: '3 · Approve'
+  dependsOn: Plan
+  condition: succeeded()
+  jobs:
+  - job: WaitForApproval
+    displayName: 'Mannual approval gate'
+    pool: 'server'
+    timeoutInMinutes: 1440
+    steps:
+    - task: ManualValidation@0
+      displayName: 'Review plan and Approve'
+      timeoutInMinutes: 1440
+      inputs:
+        notifyUsers: |
+          $(Build.RequestedForEmail)
+        instructions: |
+          ============================================================
+          INFRASTRUCTURE DEPLOYMENT -- PENDING APPRROVAL
+          ============================================================
+
+          Environment: dev
+          cluster: eksplat-dev-eks
+          k8s version: 1.30
+          Nody Type: c7i-flex.large  (2 nodes)
+
+          This plan will deploy:
+            • VPC + subnets + NAT Gateway + route tables
+            • IAM roles (cluster + node)
+            • Security groups + KMS keys
+            • EKS control plane (takes ~12-15 mins)
+            • Managed node group (takes ~5 mins after cluster)
+            • CloudWatch monitoring + alarms + dashboard
+
+          Review the full plan:
+            Pipelines -> This Run -> Artifacts -> tfplan/tfplan-output.txt
+
+          Estimated apply time: 20-25 Minutes
+        onTimeout: 'reject'
+
+# ── Stage 4: Apply ─────────────────────────────────────────────────────────
+- stage: Apply
+  displayName: '4 · Apply'
+  dependsOn: Approve
+  condition: succeeded()
+  jobs:
+  - job: TerraformApply
+    displayName: 'Terraform Apply'
+    # EKS cluster creation takes ~15 minutes.
+    # Set job timeout well above that to avoid premature failure.
+    timeoutInMinutes: 60
+    steps:
+    - checkout: self
+      displayName: 'Checkout Repository'
+
+    - template: ../templates/configure-aws.yml
+
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download Plan Artifact'
+      inputs:
+        artifact: 'tfplan'
+        path: '$(Build.ArtifactStagingDirectory)'
+
+    - task: Bash@3
+      displayName: 'Terraform Initialization'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          terraform init \
+            -backend-config="bucket=$(TF_STATE_BUCKET)" \
+            -backend-config="key=$(TF_STATE_KEY_DEV)" \
+            -backend-config="region=$(TF_STATE_REGION)" \
+            -backend-config="dynamodb_table=$(TF_STATE_LOCK_TABLE)" \
+            -backend-config="encrypt=true" \
+            -input=false \
+            -reconfigure
+
+    - task: Bash@3
+      displayName: 'Import control-plane log group (idempotency guard)'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+
+          # EKS auto-creates /aws/eks/<cluster>/cluster when the cluster
+          # enables control-plane logging. If the log group already exists
+          # (e.g. on a re-run) Terraform will fail on create. We import it
+          # first so Terraform knows it already exists and just updates
+          # retention/encryption on top. Safe to run even on first apply
+          # (import will simply fail silently if the group doesn't exist yet).
+
+          LOG_GROUP="/aws/eks/$(CLUSTER_NAME)/cluster"
+
+          if aws logs describe-log-groups \
+            --log-group-name-prefix "$LOG_GROUP" \
+            --query "logGroups[?logGroupName=='$LOG_GROUP'].logGroupName" \
+            --output text | grep -q "$LOG_GROUP"; then
+            echo "Log Group $LOG_GROUP exists - importing into state..."
+            terraform import \
+              module.monitoring.aws_cloudwatch_log_group.eks_control_plane_loggroup \
+              "$LOG_GROUP" || true
+          else
+            echo "Log Group does not exists yet - skipping import"
+          fi
+
+    - task: Bash@3
+      displayName: 'Terraform apply'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+
+          echo "==== Terraform apply ===="
+          echo "THIS WILL TAKE APPROXIMATELY 25 MINUTES"
+          echo ""
+
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            "$(Build.ArtifactStagingDirectory)/tfplan.binary"
+
+          echo ""
+          echo "==== Terraform Outputs ===="
+          terraform output
+
+# ── Stage 5: Verify ────────────────────────────────────────────────────────
+- stage: Verify
+  displayName: '5 · Verify'
+  dependsOn: Apply
+  condition: succeeded()
+  jobs:
+  - job: ClusterVerification
+    displayName: 'Verify Cluster Health'
+    timeoutInMinutes: 15
+    steps:
+    - checkout: self
+      displayName: 'Checkout Repository'
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayname: 'Update KubeConfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          echo "==== Updating Kubeconfig for cluster $(CLUSTER_NAME) ===="
+          aws eks update-kubeconfig \
+            --region $(AWS_REGION) \
+            --name $(CLUSTER_NAME)
+          echo "kubeconfig Updated successfully"
+
+    - task: Bash@3
+      displayName: 'Verify EKS cluster status'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "==== EKS CLUSTER STATUS ===="
+          CLUSTER_STATUS=$(aws eks describe-cluster \
+            --name $(CLUSTER_NAME) \
+            --query 'cluster.status' \
+            --output text)
+          echo "Cluster Status: $CLUSTER_STATUS"
+
+          if [ "$CLUSTER_STATUS" != "ACTIVE" ]; then
+            echo "ERROR: Cluster is NOT ACTIVE (got: $CLUSTER_STATUS)"
+            exit 1
+          fi
+
+          echo ""
+          echo "==== EKS Cluster Version ===="
+          aws eks describe-cluster \
+            --name $(CLUSTER_NAME) \
+            --query 'cluster.{Name:name,Version:version,Endpoint:endpoint}' \
+            --output table
+
+    - task: Bash@3
+      displayName: 'Verify Node Group'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "==== Node Group Status ===="
+          aws eks describe-nodegroup \
+            --cluster-name $(CLUSTER_NAME) \
+            --nodegroup-name "$(CLUSTER_NAME)-general" \
+            --query 'nodegroup.{Status:status,DesiredSize:scalingConfig.desiredSize,InstanceType:instanceTypes[0]}' \
+            --output table
+
+          NG_STATUS=$(aws eks describe-nodegroup \
+            --cluster-name $(CLUSTER_NAME) \
+            --nodegroup-name "$(CLUSTER_NAME)-general" \
+            --query 'nodegroup.status' \
+            --output text)
+
+          if [  "$NG_STATUS" != "ACTIVE" ]; then
+            echo "ERROR: Node Group is NOT ACTIVE yet (got: $NG_STATUS)"
+            exit 1
+          fi
+
+    - task: Bash@3
+      displayName: 'Verify nodes are ready'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "===== Waiting for nodes to be ready ====="
+          kubectl wait nodes \
+            --all \
+            --for=condition=Ready \
+            --timeout=300s
+
+          echo ""
+          echo "==== Node Details ===="
+          kubectl get nodes -o wide
+
+          echo ""
+          READY_COUNT=$(kubectl get nodes \
+            --no-headers \
+            -o custom-columns='STATUS:.status.conditions[-1].type' \
+            | grep -c "READY" || true)
+          echo "Ready Nodes: $READY_COUNT"
+
+          if [  "$READY_COUNT" -lt 2 ]; then
+            echo "ERROR: Expected at least 2 ready nodes, got $READY_COUNT"
+            exit 1
+          fi
+
+    - task: Bash@3
+      displayName: 'Verify System pods'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "==== Waiting for kube-system pods to be running ===="
+          kubectl wait pods \
+            -n kube-system \
+            --all \
+            --for=condition=Ready \
+            --timeout=300s
+
+          echo ""
+          echo "==== kube system pods ===="
+          kubectl get pods -n kube-system -o wide
+
+          echo ""
+          echo "==== EKS Addons status ===="
+          aws eks list-addons \
+            --cluster-name $(CLUSTER_NAME) \
+            --output table
+
+          for ADDON in vpc-cni coredns kube-proxy aws-ebs-csi-driver amazon-cloudwatch-observability; do
+            STATUS=$(aws eks describe-addon \
+              --cluster-name $(CLUSTER_NAME) \
+              --addon-name $ADDON \
+              --query 'addon.status' \
+              --output text 2>/dev/null || echo "NOT_FOUND")
+            echo "  $ADDON: $STATUS"
+            if [  "$STATUS" != "ACTIVE" ]; then
+              echo " WARNING: $ADDON is NOT ACTIVE (status: $STATUS)"
+            fi
+          done
+
+    - task: Bash3
+      displayName: 'Print verification summary'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo ""
+          echo "============================================================"
+          echo "  INFRASTRUCTURE DEPLOYMENT COMPLETED "
+          echo "============================================================"
+          echo ""
+          echo "  Cluster      : $(CLUSTER_NAME)"
+          echo "  REGION       : $(AWS_REGION)"
+          echo "  Version.     : $(kubectl version --short 2>/dev/null | grep Server | awk '{print $3}')"
+          echo "  Nodes        : $(kubectl get nodes --no-headers | wc -l) total"
+          echo ""
+          echo "  Dashboard URL:"
+          echo " https://$(AWS_REGION).console.aws.amazon.com/cloudwatch/home?region=$(AWS_REGION)#dashboards:name=eksplat-dev-eks-overview"
+          echo ""
+          echo " Next Step: Run Pipeline 3 - 03-app-deploy.yml"
+          echo ""
