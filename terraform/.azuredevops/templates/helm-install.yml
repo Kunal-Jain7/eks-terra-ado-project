@@ -1,0 +1,45 @@
+# .azuredevops/templates/helm-install.yml
+#
+# Reusable step template: ensures Helm is installed at the required
+# version on the self-hosted agent. Skips reinstall if already present.
+
+parameters:
+  - name: helmVersion
+    type: string
+    default: '3.16.3'
+
+steps:
+  - task: Bash@3
+    displayName: 'Install / verify Helm v${{  parameters.helmVersion }}'
+    inputs:
+      targetType: inline
+      script: |
+        set -euo pipefail
+
+        REQUIRED_VERSION="${{ parameters.helmVersion }}"
+
+        if command -v helm &>/dev/null; then
+          INSTALLED=$(helm version --short | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+')
+          if [ "$INSTALLED" = "$REQUIRED_VERSION" ]; then
+            echo "Helm $REQUIRED_VERSION is already installed."
+            helm version
+            exit 0
+          else
+            echo "Installed Helm ($INSTALLED) differs from required ($REQUIRED_VERSION). Reinstalling..."
+          fi
+        fi
+
+        echo "Installing Helm v$REQUIRED_VERSION..."
+
+        cd /tmp
+
+        curl -sLO "https://get.helm.sh/helm-v${REQUIRED_VERSION}-linux-amd64.tar.gz"
+        tar -zxf "helm-v${REQUIRED_VERSION}-linux-amd64.tar.gz"
+        sudo mv -f linux-amd64/helm /usr/local/bin/helm
+        sudo chmod +x /usr/local/bin/helm
+        rm -rf "helm-v${REQUIRED_VERSION}-linux-amd64.tar.gz" linux-amd64
+
+        echo ""
+        echo "=== Helm version ==="
+        helm version
+        echo "Helm installation complete."

@@ -1,0 +1,464 @@
+# .azuredevops/pipelines/03-app-deploy.yml
+#
+# Pipeline 3 of 4 — Application Deployment
+#
+# PURPOSE:
+#   Deploys the NGINX Ingress Controller, then the sample application via
+#   Helm, onto the EKS cluster created by Pipeline 2. Validates app
+#   availability, ingress routing, HPA, and PodDisruptionBudget after deploy.
+#
+# PRE-REQUISITES:
+#   ✅ Pipeline 2 (02-infrastructure.yml) completed successfully
+#   ✅ Cluster eksplat-dev-eks is ACTIVE with 2 Ready nodes
+#
+# RUN ORDER:
+#   01-bootstrap.yml       ✅ done
+#   02-infrastructure.yml  ✅ done
+#   03-app-deploy.yml      
+#   04-upgrade.yml
+#
+# TRIGGER: Manual only. Safe to re-run (Helm upgrade --install is idempotent).
+
+trigger: none
+pr: none
+
+pool:
+  name: databricks-ec2
+  demands:
+  - agent.name -equals databricks
+
+variables:
+- group: eksplat-aws-credentials
+- name: TF_VERSION
+  value: '1.15.6'
+- name: KUBECTL_VERSION
+  value: '1.30.0'
+- name: HELM_VERSION
+  value: '3.16.3'
+- name: CLUSTER_NAME
+  value: 'eksplat-dev-eks'
+- name: APP_NAMESPACE
+  value: 'eksplat-app'
+- name: APP_RELEASE_NAME
+  value: 'eksplat-app'
+- name: INGRESS_NAMESPACE
+  value: 'ingress-nginx'
+- name: HELM_CHART_DIR
+  value: 'helm/eksplat-app'
+
+stages:
+
+# ── Stage 1: Validate ──────────────────────────────────────────────────────
+- stage: Validate
+  displayName: '1 · Validate'
+  jobs:
+  - job: ValidateChart
+    displayName: 'Lint Helm chart + connect to cluster'
+    steps:
+    - checkout: self
+      displayName: 'Checkout repository'
+
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/helm-install.yml
+      parameters:
+        helmVersion: $(HELM_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+          echo "=== Cluster connectivity check ==="
+          kubectl get nodes
+
+    - task: Bash@3
+      displayName: 'Helm lint'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          echo "=== Helm lint: $(HELM_CHART_DIR) ==="
+          helm lint $(HELM_CHART_DIR) -f $(HELM_CHART_DIR)/values-dev.yaml
+          echo "Lint passed."
+
+    - task: Bash@3
+      displayName: 'Helm template (dry render)'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          echo "=== Rendering chart templates for review ==="
+          helm template $(APP_RELEASE_NAME) $(HELM_CHART_DIR) \
+            -f $(HELM_CHART_DIR)/values-dev.yaml \
+            --namespace $(APP_NAMESPACE) \
+            > "$(Build.ArtifactStagingDirectory)/rendered-manifests.yaml"
+          echo "Rendered manifests saved as artifact for review."
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish rendered manifests'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)/rendered-manifests.yaml'
+        artifact: 'rendered-manifests'
+        publishLocation: 'pipeline'
+
+# ── Stage 2: Deploy Ingress Controller ───────────────────────────────────
+- stage: DeployIngress
+  displayName: '2 · Deploy Ingress Controller'
+  dependsOn: Validate
+  condition: succeeded()
+  jobs:
+  - job: InstallNginxIngress
+    displayName: 'Install/upgrade NGINX Ingress Controller'
+    steps:
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/helm-install.yml
+      parameters:
+        helmVersion: $(HELM_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Add ingress-nginx Helm repo'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+
+    - task: Bash@3
+      displayName: 'Install/upgrade ingress-nginx'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== Installing NGINX Ingress Controller ==="
+          # Uses a Network Load Balancer (NLB) — Layer 4, lower latency,
+          # better suited for an EKS ingress entrypoint than Classic LB.
+          helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+            --namespace $(INGRESS_NAMESPACE) \
+            --create-namespace \
+            --set controller.service.type=LoadBalancer \
+            --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-type"=nlb \
+            --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-scheme"=internet-facing \
+            --set controller.replicaCount=2 \
+            --set controller.resources.requests.cpu=100m \
+            --set controller.resources.requests.memory=128Mi \
+            --wait \
+            --timeout 5m
+
+    - task: Bash@3
+      displayName: 'Wait for NLB to be provisioned'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== Waiting for LoadBalancer external hostname (up to 5 min) ==="
+          for i in $(seq 1 30); do
+            LB_HOSTNAME=$(kubectl get svc ingress-nginx-controller \
+              -n $(INGRESS_NAMESPACE) \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+
+            if [ -n "$LB_HOSTNAME" ]; then
+              echo "LoadBalancer ready: $LB_HOSTNAME"
+              echo "##vso[task.setvariable variable=LB_HOSTNAME;isOutput=true]$LB_HOSTNAME"
+              exit 0
+            fi
+
+            echo "Attempt $i/30: LoadBalancer not ready yet, waiting 10s..."
+            sleep 10
+          done
+
+          echo "ERROR: LoadBalancer did not provision a hostname within 5 minutes"
+          exit 1
+      name: waitForLB
+
+# ── Stage 3: Deploy Application ───────────────────────────────────────────
+- stage: DeployApp
+  displayName: '3 · Deploy Application'
+  dependsOn: DeployIngress
+  condition: succeeded()
+  jobs:
+  - job: HelmDeploy
+    displayName: 'Helm upgrade --install eksplat-app'
+    steps:
+    - checkout: self
+      displayName: 'Checkout repository'
+
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/helm-install.yml
+      parameters:
+        helmVersion: $(HELM_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Verify metrics-server (required for HPA)'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          if ! kubectl get deployment metrics-server -n kube-system &>/dev/null; then
+            echo "metrics-server not found — installing (required for HPA to function)..."
+            kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+            echo "Waiting for metrics-server to be ready..."
+            kubectl wait deployment metrics-server -n kube-system \
+              --for=condition=Available --timeout=180s
+          else
+            echo "metrics-server already installed."
+          fi
+
+    - task: Bash@3
+      displayName: 'Helm upgrade --install'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== Deploying $(APP_RELEASE_NAME) to namespace $(APP_NAMESPACE) ==="
+          helm upgrade --install $(APP_RELEASE_NAME) $(HELM_CHART_DIR) \
+            -f $(HELM_CHART_DIR)/values-dev.yaml \
+            --namespace $(APP_NAMESPACE) \
+            --create-namespace \
+            --wait \
+            --timeout 5m \
+            --atomic
+
+          echo ""
+          echo "Helm release deployed. --atomic ensures automatic rollback"
+          echo "if the deployment fails to become healthy within the timeout."
+
+    - task: Bash@3
+      displayName: 'Print Helm release status'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          echo "=== Helm release status ==="
+          helm status $(APP_RELEASE_NAME) -n $(APP_NAMESPACE)
+          echo ""
+          echo "=== Helm release history ==="
+          helm history $(APP_RELEASE_NAME) -n $(APP_NAMESPACE)
+
+# ── Stage 4: Verification ─────────────────────────────────────────────────
+- stage: Verify
+  displayName: '4 · Verification'
+  dependsOn: DeployApp
+  condition: succeeded()
+  jobs:
+  - job: ValidateDeployment
+    displayName: 'Validate app, nodes, HPA, ingress routing'
+    steps:
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Validate: application availability'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== Pod status ==="
+          kubectl get pods -n $(APP_NAMESPACE) -o wide
+
+          echo ""
+          echo "=== Waiting for all app pods to be Ready ==="
+          kubectl wait pods -n $(APP_NAMESPACE) -l app=eksplat-app \
+            --for=condition=Ready --timeout=180s
+
+          READY_PODS=$(kubectl get pods -n $(APP_NAMESPACE) -l app=eksplat-app \
+            --field-selector=status.phase=Running --no-headers | wc -l)
+          echo "Running pods: $READY_PODS"
+
+          if [ "$READY_PODS" -lt 2 ]; then
+            echo "ERROR: Expected at least 2 running pods, got $READY_PODS"
+            exit 1
+          fi
+          echo "Application availability: PASS"
+
+    - task: Bash@3
+      displayName: 'Validate: node health'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== Node status ==="
+          kubectl get nodes -o wide
+
+          NOT_READY=$(kubectl get nodes --no-headers | grep -v " Ready " | wc -l || true)
+          if [ "$NOT_READY" -gt 0 ]; then
+            echo "ERROR: $NOT_READY node(s) are not Ready"
+            exit 1
+          fi
+          echo "Node health: PASS"
+
+    - task: Bash@3
+      displayName: 'Validate: HPA is active'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== HPA status ==="
+          kubectl get hpa -n $(APP_NAMESPACE)
+
+          # Confirm HPA can read metrics (TARGETS column should not show <unknown>)
+          sleep 15  # give metrics-server a moment to populate
+          HPA_TARGETS=$(kubectl get hpa -n $(APP_NAMESPACE) eksplat-app \
+            -o jsonpath='{.status.currentMetrics}')
+
+          if [ -z "$HPA_TARGETS" ]; then
+            echo "WARNING: HPA metrics not yet populated. This can take 1-2 minutes"
+            echo "after metrics-server install. Not failing the pipeline for this."
+          else
+            echo "HPA is reading live metrics: PASS"
+          fi
+
+    - task: Bash@3
+      displayName: 'Validate: PodDisruptionBudget'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== PodDisruptionBudget status ==="
+          kubectl get pdb -n $(APP_NAMESPACE) -o wide
+
+          ALLOWED_DISRUPTIONS=$(kubectl get pdb -n $(APP_NAMESPACE) eksplat-app \
+            -o jsonpath='{.status.disruptionsAllowed}')
+          echo "Disruptions currently allowed: $ALLOWED_DISRUPTIONS"
+          echo "PodDisruptionBudget: PASS"
+
+    - task: Bash@3
+      displayName: 'Validate: ingress routing'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== Ingress resource ==="
+          kubectl get ingress -n $(APP_NAMESPACE) -o wide
+
+          LB_HOSTNAME=$(kubectl get svc ingress-nginx-controller \
+            -n $(INGRESS_NAMESPACE) \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+          echo "Load balancer hostname: $LB_HOSTNAME"
+          echo ""
+          echo "=== Testing HTTP routing through ingress (up to 6 attempts) ==="
+
+          SUCCESS=false
+          for i in $(seq 1 6); do
+            HTTP_CODE=$(curl -s -o /tmp/response.html -w "%{http_code}" \
+              --max-time 10 "http://${LB_HOSTNAME}/" || echo "000")
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Attempt $i: HTTP $HTTP_CODE — routing confirmed"
+              SUCCESS=true
+              break
+            else
+              echo "Attempt $i: HTTP $HTTP_CODE — DNS/LB may still be propagating, retrying in 15s..."
+              sleep 15
+            fi
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "WARNING: Could not confirm HTTP 200 within retry window."
+            echo "NLB DNS propagation can take up to 3-5 minutes after first creation."
+            echo "This does not fail the pipeline — verify manually with:"
+            echo "  curl http://${LB_HOSTNAME}/"
+          else
+            echo ""
+            echo "=== Response body preview ==="
+            head -c 300 /tmp/response.html
+            echo "Ingress routing: PASS"
+          fi
+
+    - task: Bash@3
+      displayName: 'Print deployment summary'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          LB_HOSTNAME=$(kubectl get svc ingress-nginx-controller \
+            -n $(INGRESS_NAMESPACE) \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "pending")
+
+          echo ""
+          echo "============================================================"
+          echo "  APPLICATION DEPLOYMENT COMPLETE"
+          echo "============================================================"
+          echo ""
+          echo "  Release    : $(APP_RELEASE_NAME)"
+          echo "  Namespace  : $(APP_NAMESPACE)"
+          echo "  Pods       : $(kubectl get pods -n $(APP_NAMESPACE) --no-headers | wc -l)"
+          echo "  Access URL : http://${LB_HOSTNAME}/"
+          echo ""
+          echo "  Try it:"
+          echo "    curl http://${LB_HOSTNAME}/"
+          echo ""
+          echo "  Next step: Run Pipeline 4 — 04-upgrade.yml"
+          echo "  when ready to exercise the Kubernetes upgrade scenario."
+          echo "============================================================"

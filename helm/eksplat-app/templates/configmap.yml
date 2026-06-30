@@ -1,0 +1,13 @@
+{{- if .Values.configMap.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "eksplat-app.fullname" . }}-html
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "eksplat-app.labels" . | nindent 4 }}
+data:
+  index.html: |
+    {{- .Values.configMap.content | nindent 4 }}
+{{- end }}
+    

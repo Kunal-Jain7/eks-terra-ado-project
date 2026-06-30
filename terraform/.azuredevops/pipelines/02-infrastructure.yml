@@ -78,7 +78,7 @@ stages:
       displayName: 'Terraform init'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -125,7 +125,7 @@ stages:
       displayName: 'Terraform init with remote backend'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -145,7 +145,7 @@ stages:
       displayName: 'Terraform Plan'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -265,7 +265,7 @@ stages:
       displayName: 'Terraform Initialization'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -285,7 +285,7 @@ stages:
       displayName: 'Import control-plane log group (idempotency guard)'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -318,7 +318,7 @@ stages:
       displayName: 'Terraform apply'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -362,7 +362,7 @@ stages:
       displayName: 'Update KubeConfig'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -378,7 +378,7 @@ stages:
       displayName: 'Verify EKS cluster status'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -408,7 +408,7 @@ stages:
       displayName: 'Verify Node Group'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -437,7 +437,7 @@ stages:
       displayName: 'Verify nodes are ready'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -470,7 +470,7 @@ stages:
       displayName: 'Verify System pods'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
@@ -510,7 +510,7 @@ stages:
       displayName: 'Print verification summary'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
         AWS_REGION: $(AWS_REGION)
       inputs:
         targetType: inline
