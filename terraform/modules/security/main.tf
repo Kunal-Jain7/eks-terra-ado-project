@@ -165,10 +165,10 @@ resource "aws_kms_key" "ebs" {
         Resource = "*"
       },
       {
-        Sid    = "AllowAutoScalingServiceLinkedRole"
+        Sid    = "AllowAutoScalingServicePrincipal"
         Effect = "Allow"
         Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-linked-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+          Service = "autoscaling.amazonaws.com"
         }
         Action = [
           "kms:Decrypt",
@@ -178,18 +178,9 @@ resource "aws_kms_key" "ebs" {
           "kms:ReEncrypt*",
         ]
         Resource = "*"
-      },
-      {
-        Sid    = "AllowAutoScalingServiceLinkedRoleGrants"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-linked-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
-        }
-        Action   = "kms:CreateGrant"
-        Resource = "*"
         Condition = {
-          Bool = {
-            "kms:GrantIsForAWSResource" = "true"
+          StringEquals = {
+            "kms:ViaService" = "ec2.${data.aws_region.current.name}.amazonaws.com"
           }
         }
       },
@@ -206,7 +197,7 @@ resource "aws_kms_key" "ebs" {
           "kms:GenerateDataKeyWithoutPlaintext",
           "kms:ReEncrypt*",
         ]
-        Resources = "*"
+        Resource = "*"
       },
     ]
   })
