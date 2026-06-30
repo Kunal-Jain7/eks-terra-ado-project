@@ -54,7 +54,7 @@ module "eks" {
   tags = var.tags
 }
 
-module "nodegroups" {
+module "nodegroup" {
   source = "../../modules/nodegroup"
 
   cluster_name           = module.eks.cluster_name

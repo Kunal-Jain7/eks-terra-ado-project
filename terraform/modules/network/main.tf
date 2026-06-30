@@ -16,7 +16,7 @@ locals {
   private_subnets = {
     for idx, az in var.availability_zones :
     az => {
-      cidr = var.var.private_subnet_cidrs[idx]
+      cidr = var.private_subnet_cidrs[idx]
     }
   }
 
@@ -104,7 +104,7 @@ resource "aws_nat_gateway" "client_nat" {
   for_each = local.nat_keys
 
   allocation_id = aws_eip.client_nat[each.key].id
-  subnet_id     = var.single_nat_gateway ? aws_subnet_public[var.availability_zones[0]].id : aws_subnet.public_subnet[each.key].id
+  subnet_id     = var.single_nat_gateway ? aws_subnet.public_subnet[var.availability_zones[0]].id : aws_subnet.public_subnet[each.key].id
 
   tags = merge(local.common_tags, {
     Name = "${var.project_name}-${var.environment}-natgtw-${each.key}"

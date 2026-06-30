@@ -64,7 +64,7 @@ output "cluster_certificate_authority_data" {
 }
 
 output "cluster_version" {
-  value = module.eks_cluster_version
+  value = module.eks.cluster_version
 }
 
 output "oidc_provider_arn" {
@@ -73,7 +73,7 @@ output "oidc_provider_arn" {
 }
 
 output "oidc_provider_url" {
-  value       = module.ekd_oidc_provider_url
+  value       = module.eks_oidc_provider_url
   description = "OIDC provider URL (without https://) — used in IAM trust policy conditions"
 }
 

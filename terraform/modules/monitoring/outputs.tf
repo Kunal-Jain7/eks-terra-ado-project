@@ -36,7 +36,7 @@ output "dashboard_name" {
 }
 
 output "dashboard_url" {
-  value       = "https://${data.aws_region.current.name}.console.aws.amazon.com/cloudwatch/home?region=${data.aws_region.current.name}#dashboards:name=${aws_cloudwatch_dashboard.cluster.dashboard_name}"
+  value       = "https://${data.aws_region.current.name}.console.aws.amazon.com/cloudwatch/home?region=${data.aws_region.current.name}#dashboards:name=${aws_cloudwatch_dashboard.cluster_dashboard.dashboard_name}"
   description = "Direct URL to the CloudWatch dashboard in the AWS console"
 }
 
