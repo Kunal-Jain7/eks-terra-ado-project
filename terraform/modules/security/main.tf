@@ -12,7 +12,6 @@
 # ---------------------------------------------------------------------------
 
 data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
 
 resource "aws_security_group" "eks_sg" {
   name        = "${var.project_name}-${var.environment}-eks-nodes-sg"
@@ -178,17 +177,12 @@ resource "aws_kms_key" "ebs" {
           "kms:ReEncrypt*",
         ]
         Resource = "*"
-        Condition = {
-          StringEquals = {
-            "kms:ViaService" = "ec2.${data.aws_region.current.name}.amazonaws.com"
-          }
-        }
       },
       {
         Sid    = "AllowEC2ServiceUseOfTheKey"
         Effect = "Allow"
         Principal = {
-          Service = "ec2.${data.aws_region.current.name}.amazonaws.com"
+          Service = "ec2.amazonaws.com"
         }
         Action = [
           "kms:Decrypt",
