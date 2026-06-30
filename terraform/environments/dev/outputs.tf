@@ -73,7 +73,7 @@ output "oidc_provider_arn" {
 }
 
 output "oidc_provider_url" {
-  value       = module.eks_oidc_provider_url
+  value       = module.eks.oidc_provider_url
   description = "OIDC provider URL (without https://) — used in IAM trust policy conditions"
 }
 
