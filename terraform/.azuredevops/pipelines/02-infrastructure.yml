@@ -455,13 +455,9 @@ stages:
           kubectl get nodes -o wide
 
           echo ""
-          READY_COUNT=$(kubectl get nodes \
-            --no-headers \
-            -o custom-columns='STATUS:.status.conditions[-1].type' \
-            | grep -c "READY" || true)
+          READY_COUNT=$(kubectl get nodes --no-headers | awk '$2 == "Ready"' | wc -l)
           echo "Ready Nodes: $READY_COUNT"
-
-          if [  "$READY_COUNT" -lt 2 ]; then
+          if [ "$READY_COUNT" -lt 2 ]; then
             echo "ERROR: Expected at least 2 ready nodes, got $READY_COUNT"
             exit 1
           fi
