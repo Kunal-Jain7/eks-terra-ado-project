@@ -173,8 +173,27 @@ resource "aws_kms_key" "ebs" {
           "kms:Decrypt",
           "kms:DescribeKey",
           "kms:CreateGrant",
+          "kms:GenerateDataKey",
           "kms:GenerateDataKeyWithoutPlaintext",
-          "kms:ReEncrypt*",
+          "kms:ReEncryptFrom",
+          "kms:ReEncryptTo",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowAutoScalingServiceLinkedRole"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-linked-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+        }
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:GenerateDataKey",
+          "kms:GenerateDataKeyWithoutPlaintext",
+          "kms:ReEncryptFrom",
+          "kms:ReEncryptTo",
         ]
         Resource = "*"
       },
@@ -188,8 +207,10 @@ resource "aws_kms_key" "ebs" {
           "kms:Decrypt",
           "kms:DescribeKey",
           "kms:CreateGrant",
+          "kms:GenerateDataKey",
           "kms:GenerateDataKeyWithoutPlaintext",
-          "kms:ReEncrypt*",
+          "kms:ReEncryptFrom",
+          "kms:ReEncryptTo",
         ]
         Resource = "*"
       },
@@ -204,4 +225,20 @@ resource "aws_kms_key" "ebs" {
 resource "aws_kms_alias" "ebs_alias" {
   name          = "alias/${var.project_name}-${var.environment}-ebs"
   target_key_id = aws_kms_key.ebs.key_id
+}
+
+resource "aws_kms_grant" "ebs_autoscaling" {
+  name              = "${var.project_name}-${var.environment}-ebs-asg-grant"
+  key_id            = aws_kms_key.ebs.key_id
+  grantee_principal = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-linked-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+
+  operations = [
+    "Decrypt",
+    "DescribeKey",
+    "CreateGrant",
+    "GenerateDataKey",
+    "GenerateDataKeyWithoutPlaintext",
+    "ReEncryptFrom",
+    "ReEncryptTo",
+  ]
 }
