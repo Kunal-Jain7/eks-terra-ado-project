@@ -150,38 +150,38 @@ stages:
       inputs:
         targetType: inline
         workingDirectory: $(TF_DIR)
-      script: |
-        set -euo pipefail
+        script: |
+          set -euo pipefail
 
-        echo "==== Terraform Plan ===="
-        terraform plan \
-          -input=false \
-          -var-file="terraform.tfvars" \
-          -out="$(Build.ArtifactStagingDirectory)/tfplan.binary"
+          echo "==== Terraform Plan ===="
+          terraform plan \
+            -input=false \
+            -var-file="terraform.tfvars" \
+            -out="$(Build.ArtifactStagingDirectory)/tfplan.binary"
 
-        echo ""
-        echo "=== Saving human-readable plan ==="
-        terraform show -no-color \
-          "$(Build.ArtifactStagingDirectory)/tfplan.binary" \
-          > "$(Build.ArtifactStagingDirectory)/plan-output.txt"
+          echo ""
+          echo "=== Saving human-readable plan ==="
+          terraform show -no-color \
+            "$(Build.ArtifactStagingDirectory)/tfplan.binary" \
+            > "$(Build.ArtifactStagingDirectory)/plan-output.txt"
 
-        echo ""
-        echo "==== Plan Summary ===="
-        echo "---- Resources to Add ----"
-        grep "will be created" \
-          "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
-          | xargs -I{} echo "  {} resource(s) to create"
+          echo ""
+          echo "==== Plan Summary ===="
+          echo "---- Resources to Add ----"
+          grep "will be created" \
+            "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
+            | xargs -I{} echo "  {} resource(s) to create"
 
-        grep "will be destroyed" \
-          "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
-          | xargs -I{} echo "  {} resource(s) to destroy"
+          grep "will be destroyed" \
+            "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
+            | xargs -I{} echo "  {} resource(s) to destroy"
 
-        grep "will be updated in-place\|must be replaced" \
-          "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
-          | xargs -I{} echo "  {} resource(s) to change"
+          grep "will be updated in-place\|must be replaced" \
+            "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
+            | xargs -I{} echo "  {} resource(s) to change"
 
-        echo ""
-        echo "Review Artifact 'tfplan/plan-output.txt' before approving"
+          echo ""
+          echo "Review Artifact 'tfplan/plan-output.txt' before approving"
 
     - task: PublishPipelineArtifact@1
       displayName: 'Publish Plan Artifacts'
@@ -353,7 +353,7 @@ stages:
         kubectlVersion: $(KUBECTL_VERSION)
 
     - task: Bash@3
-      displayname: 'Update KubeConfig'
+      displayName: 'Update KubeConfig'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
         AWS_SECRET_KEY_ACCESS: $(AWS_SECRET_KEY_ACCESS)
