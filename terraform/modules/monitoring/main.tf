@@ -58,7 +58,7 @@ resource "aws_kms_key" "cloudwatch" {
         Resource = "*"
         Condition = {
           ArnEquals = {
-            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${local.region}:${local.account_id}:*"
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${local.region}:${local.account_id}:log-group:*"
           }
         }
       },
@@ -99,7 +99,7 @@ resource "aws_cloudwatch_log_group" "eks_control_plane_loggroup" {
 
 # Container Insights log group (performance metrics and container logs)
 resource "aws_cloudwatch_log_group" "container_insights" {
-  name              = "aws/containerinsights/${var.cluster_name}/performance"
+  name              = "/aws/containerinsights/${var.cluster_name}/performance"
   retention_in_days = var.log_retention_days
   kms_key_id        = aws_kms_key.cloudwatch.arn
 
@@ -110,7 +110,7 @@ resource "aws_cloudwatch_log_group" "container_insights" {
 
 # Application log group (Pods write here via Fluent Bit, deployed in Phase 8)
 resource "aws_cloudwatch_log_group" "application_logs" {
-  name              = "aws/containerinsights/${var.cluster_name}/application"
+  name              = "/aws/containerinsights/${var.cluster_name}/application"
   retention_in_days = var.log_retention_days
   kms_key_id        = aws_kms_key.cloudwatch.arn
 
@@ -124,7 +124,7 @@ resource "aws_cloudwatch_log_group" "application_logs" {
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "cw_agent_assume_role" {
   statement {
-    actions = ["sts:AssumeRolewithwebIdentity"]
+    actions = ["sts:AssumeRoleWithWebIdentity"]
 
     principals {
       type        = "Federated"
@@ -140,7 +140,7 @@ data "aws_iam_policy_document" "cw_agent_assume_role" {
     condition {
       test     = "StringEquals"
       variable = "${var.oidc_provider_url}:aud"
-      values   = ["sts:amazonaws.com"]
+      values   = ["sts.amazonaws.com"]
     }
   }
 }
@@ -214,7 +214,7 @@ resource "aws_cloudwatch_metric_alarm" "node_cpu_high" {
   treat_missing_data  = "notBreaching"
 
   dimensions = {
-    ClusterNaame = var.cluster_name
+    ClusterName = var.cluster_name
   }
 
   alarm_actions = [aws_sns_topic.alarms.arn]
