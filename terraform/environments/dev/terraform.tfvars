@@ -44,7 +44,7 @@ public_access_cidrs    = ["0.0.0.0/0"]
 addon_versions = {
   "vpc-cni"            = null
   "coredns"            = null
-  "kube-rpoxy"         = null
+  "kube-proxy"         = null
   "aws-ebs-csi-driver" = null
 }
 
