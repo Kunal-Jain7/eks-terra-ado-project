@@ -500,7 +500,7 @@ stages:
             fi
           done
 
-    - task: Bash3
+    - task: Bash@3
       displayName: 'Print verification summary'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
