@@ -11,6 +11,9 @@
 # Worker node security group
 # ---------------------------------------------------------------------------
 
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 resource "aws_security_group" "eks_sg" {
   name        = "${var.project_name}-${var.environment}-eks-nodes-sg"
   description = "Security group for EKS managed worker nodes"
@@ -142,6 +145,71 @@ resource "aws_kms_key" "ebs" {
   description             = "EBS volume encryption key for eks worker nodes"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+
+  # Explicit key policy: grants root full access (required baseline) PLUS
+  # the AWS Auto Scaling service-linked role permission to use this key.
+  # The EKS managed node group's underlying ASG launches EC2 instances with
+  # encrypted EBS volumes on your behalf — without this grant, instance
+  # creation fails with "KMS key is inaccessible" and the node group hangs.
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowRootFullAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowAutoScalingServiceLinkedRole"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-linked-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+        }
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:GenerateDataKeyWithoutPlaintext",
+          "kms:ReEncrypt*",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowAutoScalingServiceLinkedRoleGrants"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-linked-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+        }
+        Action   = "kms:CreateGrant"
+        Resource = "*"
+        Condition = {
+          Bool = {
+            "kms:GrantIsForAWSResource" = "true"
+          }
+        }
+      },
+      {
+        Sid    = "AllowEC2ServiceUseOfTheKey"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.${data.aws_region.current.name}.amazonaws.com"
+        }
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:GenerateDataKeyWithoutPlaintext",
+          "kms:ReEncrypt*",
+        ]
+        Resources = "*"
+      },
+    ]
+  })
 
   tags = merge(var.tags, {
     Name = "${var.project_name}-${var.environment}-ebs-kms"
