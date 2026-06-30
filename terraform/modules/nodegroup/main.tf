@@ -28,7 +28,7 @@ resource "aws_launch_template" "eks_nodes" {
   # legitimately need instance metadata)
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "enabled"
+    http_tokens                 = "required"
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
