@@ -168,17 +168,23 @@ stages:
           echo ""
           echo "==== Plan Summary ===="
           echo "---- Resources to Add ----"
-          grep "will be created" \
-            "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
-            | xargs -I{} echo "  {} resource(s) to create"
+          CREATE_COUNT=$(grep -c "will be created" \
+            "$(Build.ArtifactStagingDirectory)/plan-output.txt" || true)
 
-          grep "will be destroyed" \
-            "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
-            | xargs -I{} echo "  {} resource(s) to destroy"
+          DESTROY_COUNT=$(grep -c "will be destroyed" \
+            "$(Build.ArtifactStagingDirectory)/plan-output.txt" || true)
 
-          grep "will be updated in-place\|must be replaced" \
-            "$(Build.ArtifactStagingDirectory)/plan-output.txt" | wc -l \
-            | xargs -I{} echo "  {} resource(s) to change"
+          CHANGE_COUNT=$(grep -E -c "will be updated in-place|must be replaced" \
+            "$(Build.ArtifactStagingDirectory)/plan-output.txt" || true)
+
+          echo "---- Resources to Add ----"
+          echo "  $CREATE_COUNT resource(s) to create"
+
+          echo "---- Resources to Destroy ----"
+          echo "  $DESTROY_COUNT resource(s) to destroy"
+
+          echo "---- Resources to Change ----"
+          echo "  $CHANGE_COUNT resource(s) to change"
 
           echo ""
           echo "Review Artifact 'tfplan/plan-output.txt' before approving"
