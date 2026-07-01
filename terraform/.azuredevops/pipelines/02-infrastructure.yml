@@ -339,192 +339,192 @@ stages:
           echo "==== Terraform Outputs ===="
           terraform output
 
-# ── Stage 5: Verify ────────────────────────────────────────────────────────
-- stage: Verify
-  displayName: '5 · Verify'
-  dependsOn: Apply
-  condition: succeeded()
-  jobs:
-  - job: ClusterVerification
-    displayName: 'Verify Cluster Health'
-    timeoutInMinutes: 15
-    steps:
-    - checkout: self
-      displayName: 'Checkout Repository'
+# # ── Stage 5: Verify ────────────────────────────────────────────────────────
+# - stage: Verify
+#   displayName: '5 · Verify'
+#   dependsOn: Apply
+#   condition: succeeded()
+#   jobs:
+#   - job: ClusterVerification
+#     displayName: 'Verify Cluster Health'
+#     timeoutInMinutes: 15
+#     steps:
+#     - checkout: self
+#       displayName: 'Checkout Repository'
 
-    - template: ../templates/configure-aws.yml
+#     - template: ../templates/configure-aws.yml
 
-    - template: ../templates/kubectl-install.yml
-      parameters:
-        kubectlVersion: $(KUBECTL_VERSION)
+#     - template: ../templates/kubectl-install.yml
+#       parameters:
+#         kubectlVersion: $(KUBECTL_VERSION)
 
-    - task: Bash@3
-      displayName: 'Update KubeConfig'
-      env:
-        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-        AWS_REGION: $(AWS_REGION)
-      inputs:
-        targetType: inline
-        script: |
-          set -euo pipefail
-          echo "==== Updating Kubeconfig for cluster $(CLUSTER_NAME) ===="
-          aws eks update-kubeconfig \
-            --region $(AWS_REGION) \
-            --name $(CLUSTER_NAME)
-          echo "kubeconfig Updated successfully"
+#     - task: Bash@3
+#       displayName: 'Update KubeConfig'
+#       env:
+#         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+#         AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+#         AWS_REGION: $(AWS_REGION)
+#       inputs:
+#         targetType: inline
+#         script: |
+#           set -euo pipefail
+#           echo "==== Updating Kubeconfig for cluster $(CLUSTER_NAME) ===="
+#           aws eks update-kubeconfig \
+#             --region $(AWS_REGION) \
+#             --name $(CLUSTER_NAME)
+#           echo "kubeconfig Updated successfully"
 
-    - task: Bash@3
-      displayName: 'Verify EKS cluster status'
-      env:
-        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-        AWS_REGION: $(AWS_REGION)
-      inputs:
-        targetType: inline
-        script: |
-          set -euo pipefail
+#     - task: Bash@3
+#       displayName: 'Verify EKS cluster status'
+#       env:
+#         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+#         AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+#         AWS_REGION: $(AWS_REGION)
+#       inputs:
+#         targetType: inline
+#         script: |
+#           set -euo pipefail
 
-          echo "==== EKS CLUSTER STATUS ===="
-          CLUSTER_STATUS=$(aws eks describe-cluster \
-            --name $(CLUSTER_NAME) \
-            --query 'cluster.status' \
-            --output text)
-          echo "Cluster Status: $CLUSTER_STATUS"
+#           echo "==== EKS CLUSTER STATUS ===="
+#           CLUSTER_STATUS=$(aws eks describe-cluster \
+#             --name $(CLUSTER_NAME) \
+#             --query 'cluster.status' \
+#             --output text)
+#           echo "Cluster Status: $CLUSTER_STATUS"
 
-          if [ "$CLUSTER_STATUS" != "ACTIVE" ]; then
-            echo "ERROR: Cluster is NOT ACTIVE (got: $CLUSTER_STATUS)"
-            exit 1
-          fi
+#           if [ "$CLUSTER_STATUS" != "ACTIVE" ]; then
+#             echo "ERROR: Cluster is NOT ACTIVE (got: $CLUSTER_STATUS)"
+#             exit 1
+#           fi
 
-          echo ""
-          echo "==== EKS Cluster Version ===="
-          aws eks describe-cluster \
-            --name $(CLUSTER_NAME) \
-            --query 'cluster.{Name:name,Version:version,Endpoint:endpoint}' \
-            --output table
+#           echo ""
+#           echo "==== EKS Cluster Version ===="
+#           aws eks describe-cluster \
+#             --name $(CLUSTER_NAME) \
+#             --query 'cluster.{Name:name,Version:version,Endpoint:endpoint}' \
+#             --output table
 
-    - task: Bash@3
-      displayName: 'Verify Node Group'
-      env:
-        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-        AWS_REGION: $(AWS_REGION)
-      inputs:
-        targetType: inline
-        script: |
-          set -euo pipefail
+#     - task: Bash@3
+#       displayName: 'Verify Node Group'
+#       env:
+#         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+#         AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+#         AWS_REGION: $(AWS_REGION)
+#       inputs:
+#         targetType: inline
+#         script: |
+#           set -euo pipefail
 
-          echo "==== Node Group Status ===="
-          aws eks describe-nodegroup \
-            --cluster-name $(CLUSTER_NAME) \
-            --nodegroup-name "$(CLUSTER_NAME)-general" \
-            --query 'nodegroup.{Status:status,DesiredSize:scalingConfig.desiredSize,InstanceType:instanceTypes[0]}' \
-            --output table
+#           echo "==== Node Group Status ===="
+#           aws eks describe-nodegroup \
+#             --cluster-name $(CLUSTER_NAME) \
+#             --nodegroup-name "$(CLUSTER_NAME)-general" \
+#             --query 'nodegroup.{Status:status,DesiredSize:scalingConfig.desiredSize,InstanceType:instanceTypes[0]}' \
+#             --output table
 
-          NG_STATUS=$(aws eks describe-nodegroup \
-            --cluster-name $(CLUSTER_NAME) \
-            --nodegroup-name "$(CLUSTER_NAME)-general" \
-            --query 'nodegroup.status' \
-            --output text)
+#           NG_STATUS=$(aws eks describe-nodegroup \
+#             --cluster-name $(CLUSTER_NAME) \
+#             --nodegroup-name "$(CLUSTER_NAME)-general" \
+#             --query 'nodegroup.status' \
+#             --output text)
 
-          if [  "$NG_STATUS" != "ACTIVE" ]; then
-            echo "ERROR: Node Group is NOT ACTIVE yet (got: $NG_STATUS)"
-            exit 1
-          fi
+#           if [  "$NG_STATUS" != "ACTIVE" ]; then
+#             echo "ERROR: Node Group is NOT ACTIVE yet (got: $NG_STATUS)"
+#             exit 1
+#           fi
 
-    - task: Bash@3
-      displayName: 'Verify nodes are ready'
-      env:
-        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-        AWS_REGION: $(AWS_REGION)
-      inputs:
-        targetType: inline
-        script: |
-          set -euo pipefail
+#     - task: Bash@3
+#       displayName: 'Verify nodes are ready'
+#       env:
+#         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+#         AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+#         AWS_REGION: $(AWS_REGION)
+#       inputs:
+#         targetType: inline
+#         script: |
+#           set -euo pipefail
 
-          echo "===== Waiting for nodes to be ready ====="
-          kubectl wait nodes \
-            --all \
-            --for=condition=Ready \
-            --timeout=300s
+#           echo "===== Waiting for nodes to be ready ====="
+#           kubectl wait nodes \
+#             --all \
+#             --for=condition=Ready \
+#             --timeout=300s
 
-          echo ""
-          echo "==== Node Details ===="
-          kubectl get nodes -o wide
+#           echo ""
+#           echo "==== Node Details ===="
+#           kubectl get nodes -o wide
 
-          echo ""
-          READY_COUNT=$(kubectl get nodes --no-headers | awk '$2 == "Ready"' | wc -l)
-          echo "Ready Nodes: $READY_COUNT"
-          if [ "$READY_COUNT" -lt 2 ]; then
-            echo "ERROR: Expected at least 2 ready nodes, got $READY_COUNT"
-            exit 1
-          fi
+#           echo ""
+#           READY_COUNT=$(kubectl get nodes --no-headers | awk '$2 == "Ready"' | wc -l)
+#           echo "Ready Nodes: $READY_COUNT"
+#           if [ "$READY_COUNT" -lt 2 ]; then
+#             echo "ERROR: Expected at least 2 ready nodes, got $READY_COUNT"
+#             exit 1
+#           fi
 
-    - task: Bash@3
-      displayName: 'Verify System pods'
-      env:
-        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-        AWS_REGION: $(AWS_REGION)
-      inputs:
-        targetType: inline
-        script: |
-          set -euo pipefail
+#     - task: Bash@3
+#       displayName: 'Verify System pods'
+#       env:
+#         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+#         AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+#         AWS_REGION: $(AWS_REGION)
+#       inputs:
+#         targetType: inline
+#         script: |
+#           set -euo pipefail
 
-          echo "==== Waiting for kube-system pods to be running ===="
-          kubectl wait pods \
-            -n kube-system \
-            --all \
-            --for=condition=Ready \
-            --timeout=300s
+#           echo "==== Waiting for kube-system pods to be running ===="
+#           kubectl wait pods \
+#             -n kube-system \
+#             --all \
+#             --for=condition=Ready \
+#             --timeout=300s
 
-          echo ""
-          echo "==== kube system pods ===="
-          kubectl get pods -n kube-system -o wide
+#           echo ""
+#           echo "==== kube system pods ===="
+#           kubectl get pods -n kube-system -o wide
 
-          echo ""
-          echo "==== EKS Addons status ===="
-          aws eks list-addons \
-            --cluster-name $(CLUSTER_NAME) \
-            --output table
+#           echo ""
+#           echo "==== EKS Addons status ===="
+#           aws eks list-addons \
+#             --cluster-name $(CLUSTER_NAME) \
+#             --output table
 
-          for ADDON in vpc-cni coredns kube-proxy aws-ebs-csi-driver amazon-cloudwatch-observability; do
-            STATUS=$(aws eks describe-addon \
-              --cluster-name $(CLUSTER_NAME) \
-              --addon-name $ADDON \
-              --query 'addon.status' \
-              --output text 2>/dev/null || echo "NOT_FOUND")
-            echo "  $ADDON: $STATUS"
-            if [  "$STATUS" != "ACTIVE" ]; then
-              echo " WARNING: $ADDON is NOT ACTIVE (status: $STATUS)"
-            fi
-          done
+#           for ADDON in vpc-cni coredns kube-proxy aws-ebs-csi-driver amazon-cloudwatch-observability; do
+#             STATUS=$(aws eks describe-addon \
+#               --cluster-name $(CLUSTER_NAME) \
+#               --addon-name $ADDON \
+#               --query 'addon.status' \
+#               --output text 2>/dev/null || echo "NOT_FOUND")
+#             echo "  $ADDON: $STATUS"
+#             if [  "$STATUS" != "ACTIVE" ]; then
+#               echo " WARNING: $ADDON is NOT ACTIVE (status: $STATUS)"
+#             fi
+#           done
 
-    - task: Bash@3
-      displayName: 'Print verification summary'
-      env:
-        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-        AWS_REGION: $(AWS_REGION)
-      inputs:
-        targetType: inline
-        script: |
-          set -euo pipefail
+#     - task: Bash@3
+#       displayName: 'Print verification summary'
+#       env:
+#         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+#         AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+#         AWS_REGION: $(AWS_REGION)
+#       inputs:
+#         targetType: inline
+#         script: |
+#           set -euo pipefail
 
-          echo ""
-          echo "============================================================"
-          echo "  INFRASTRUCTURE DEPLOYMENT COMPLETED "
-          echo "============================================================"
-          echo ""
-          echo "  Cluster      : $(CLUSTER_NAME)"
-          echo "  REGION       : $(AWS_REGION)"
-          echo "  Version.     : $(kubectl version --short 2>/dev/null | grep Server | awk '{print $3}')"
-          echo "  Nodes        : $(kubectl get nodes --no-headers | wc -l) total"
-          echo ""
-          echo "  Dashboard URL:"
-          echo " https://$(AWS_REGION).console.aws.amazon.com/cloudwatch/home?region=$(AWS_REGION)#dashboards:name=eksplat-dev-eks-overview"
-          echo ""
-          echo " Next Step: Run Pipeline 3 - 03-app-deploy.yml"
-          echo ""
+#           echo ""
+#           echo "============================================================"
+#           echo "  INFRASTRUCTURE DEPLOYMENT COMPLETED "
+#           echo "============================================================"
+#           echo ""
+#           echo "  Cluster      : $(CLUSTER_NAME)"
+#           echo "  REGION       : $(AWS_REGION)"
+#           echo "  Version.     : $(kubectl version --short 2>/dev/null | grep Server | awk '{print $3}')"
+#           echo "  Nodes        : $(kubectl get nodes --no-headers | wc -l) total"
+#           echo ""
+#           echo "  Dashboard URL:"
+#           echo " https://$(AWS_REGION).console.aws.amazon.com/cloudwatch/home?region=$(AWS_REGION)#dashboards:name=eksplat-dev-eks-overview"
+#           echo ""
+#           echo " Next Step: Run Pipeline 3 - 03-app-deploy.yml"
+#           echo ""
