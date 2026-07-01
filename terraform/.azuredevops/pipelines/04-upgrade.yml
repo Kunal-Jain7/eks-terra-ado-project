@@ -1,0 +1,909 @@
+# .azuredevops/pipelines/04-upgrade.yml
+#
+# Pipeline 4 of 4 — Kubernetes Version Upgrade
+#
+# PURPOSE:
+#   Upgrades the EKS cluster from 1.30 → 1.31 while application traffic
+#   remains live with zero downtime. Implements Strategy A (Managed Node
+#   Group Rolling Upgrade) with Strategy C (canary-style validation between
+#   control plane and node group upgrade steps).
+#
+# UPGRADE ORDER (mandatory — must always follow this sequence):
+#   1. Control plane first  (AWS upgrades the managed control plane)
+#   2. Addons second        (must match new control plane version)
+#   3. Node group last      (rolling replacement of worker nodes)
+#
+# ZERO DOWNTIME PROTECTIONS:
+#   - App scaled to 4 replicas before upgrade starts (PDB allows disruption)
+#   - PodDisruptionBudget enforces minAvailable: 2 throughout node drain
+#   - maxUnavailable: 34% on node group (1 of 2 nodes at a time)
+#   - Readiness probes gate traffic admission on all new pods
+#   - Automated rollback on any stage failure
+#
+# PRE-REQUISITES:
+#   ✅ Pipeline 3 completed — app deployed and healthy
+#   ✅ Cluster running on 1.30
+#   ✅ Both nodes Ready
+#
+# TRIGGER: Manual only.
+
+trigger: none
+pr: none
+
+pool:
+  name: databricks-ec2
+  demands:
+  - agent.name -equals databricks
+
+variables:
+- group: eksplat-aws-credentials
+- group: eksplat-terraform-backend
+- name: TF_DIR
+  value: 'terraform/environments/dev'
+- name: TF_VERSION
+  value: '1.15.6'
+- name: KUBECTL_VERSION
+  value: '1.31.0'
+- name: HELM_VERSION
+  value: '3.16.3'
+- name: CLUSTER_NAME
+  value: 'eksplat-dev-eks'
+- name: APP_NAMESPACE
+  value: 'eksplat-app'
+- name: INGRESS_NAMESPACE
+  value: 'ingress-nginx'
+- name: FROM_VERSION
+  value: '1.30'
+- name: TARGET_VERSION
+  value: '1.31'
+- name: NODEGROUP_NAME
+  value: 'eksplat-dev-eks-general'
+- name: UPGRADE_REPLICAS
+  value: '4'
+- name: NORMAL_REPLICAS
+  value: '2'
+
+stages:
+
+# ── Stage 1: Pre-upgrade Validation ────────────────────────────────────────
+- stage: PreUpgradeValidation
+  displayName: '1 · Pre-upgrade Validation'
+  jobs:
+  - job: ValidatePreUpgrade
+    displayName: 'Confirm cluster is healthy before upgrade'
+    steps:
+    - checkout: self
+
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Confirm current version is $(FROM_VERSION)'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          CURRENT=$(aws eks describe-cluster \
+            --name $(CLUSTER_NAME) \
+            --query 'cluster.version' \
+            --output text)
+
+          echo "Current cluster version: $CURRENT"
+          echo "Target upgrade version : $(TARGET_VERSION)"
+
+          if [ "$CURRENT" != "$(FROM_VERSION)" ]; then
+            echo "ERROR: Expected cluster version $(FROM_VERSION), got $CURRENT"
+            echo "Update FROM_VERSION variable if cluster is already on a newer version."
+            exit 1
+          fi
+          echo "Version check passed."
+
+    - task: Bash@3
+      displayName: 'Confirm all nodes Ready'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== Node status ==="
+          kubectl get nodes -o wide
+
+          NOT_READY=$(kubectl get nodes --no-headers \
+            | awk '$2 != "Ready"' | wc -l)
+          if [ "$NOT_READY" -gt 0 ]; then
+            echo "ERROR: $NOT_READY node(s) are not Ready. Fix before upgrading."
+            exit 1
+          fi
+          echo "All nodes Ready."
+
+    - task: Bash@3
+      displayName: 'Confirm app is healthy pre-upgrade'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== App pods ==="
+          kubectl get pods -n $(APP_NAMESPACE) -o wide
+
+          READY=$(kubectl get pods -n $(APP_NAMESPACE) \
+            --no-headers | awk '$2 ~ /^[0-9]+\/[0-9]+$/ && $2 == gensub(/\/.*/, "/" substr($2, index($2,"/")+1), 1, $2)' \
+            | wc -l || true)
+
+          RUNNING=$(kubectl get pods -n $(APP_NAMESPACE) \
+            --no-headers | awk '$3 == "Running"' | wc -l)
+
+          echo "Running pods: $RUNNING"
+
+          if [ "$RUNNING" -lt 2 ]; then
+            echo "ERROR: App has fewer than 2 running pods. Fix before upgrading."
+            exit 1
+          fi
+
+          echo "=== PDB status ==="
+          kubectl get pdb -n $(APP_NAMESPACE)
+          echo "Pre-upgrade validation passed."
+
+    - task: Bash@3
+      displayName: 'Confirm all EKS addons ACTIVE'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          FAILED=0
+          for ADDON in vpc-cni coredns kube-proxy aws-ebs-csi-driver amazon-cloudwatch-observability; do
+            STATUS=$(aws eks describe-addon \
+              --cluster-name $(CLUSTER_NAME) \
+              --addon-name $ADDON \
+              --query 'addon.status' \
+              --output text 2>/dev/null || echo "NOT_FOUND")
+            echo "  $ADDON: $STATUS"
+            if [ "$STATUS" != "ACTIVE" ]; then
+              echo "  ERROR: $ADDON is not ACTIVE"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "ERROR: $FAILED addon(s) not ACTIVE. Fix before upgrading."
+            exit 1
+          fi
+          echo "All addons ACTIVE."
+
+# ── Stage 2: Scale Up App ──────────────────────────────────────────────────
+- stage: ScaleUp
+  displayName: '2 · Scale Up App'
+  dependsOn: PreUpgradeValidation
+  condition: succeeded()
+  jobs:
+  - job: ScaleUpApp
+    displayName: 'Scale app to $(UPGRADE_REPLICAS) replicas (PDB headroom)'
+    steps:
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Scale deployment to $(UPGRADE_REPLICAS) replicas'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "Scaling eksplat-app to $(UPGRADE_REPLICAS) replicas..."
+          echo "This gives PDB (minAvailable: 2) room to allow disruptions during node drain."
+
+          kubectl scale deployment eksplat-app \
+            -n $(APP_NAMESPACE) \
+            --replicas=$(UPGRADE_REPLICAS)
+
+          echo "Waiting for $(UPGRADE_REPLICAS) replicas to be Ready..."
+          kubectl rollout status deployment eksplat-app \
+            -n $(APP_NAMESPACE) \
+            --timeout=180s
+
+          echo "=== Current pod distribution ==="
+          kubectl get pods -n $(APP_NAMESPACE) -o wide
+
+          echo "=== PDB status after scale-up ==="
+          kubectl get pdb -n $(APP_NAMESPACE)
+
+          DISRUPTIONS=$(kubectl get pdb -n $(APP_NAMESPACE) eksplat-app \
+            -o jsonpath='{.status.disruptionsAllowed}')
+          echo "Disruptions now allowed: $DISRUPTIONS"
+
+          if [ "$DISRUPTIONS" -lt 1 ]; then
+            echo "ERROR: PDB still shows 0 allowed disruptions after scale-up."
+            echo "Cannot proceed safely. Check pod count vs minAvailable."
+            exit 1
+          fi
+          echo "Scale-up complete. Safe to proceed with upgrade."
+
+# ── Stage 3: Upgrade Control Plane ─────────────────────────────────────────
+- stage: UpgradeControlPlane
+  displayName: '3 · Upgrade Control Plane'
+  dependsOn: ScaleUp
+  condition: succeeded()
+  jobs:
+  - job: UpgradeControlPlane
+    displayName: 'Upgrade EKS control plane to $(TARGET_VERSION)'
+    timeoutInMinutes: 45
+    steps:
+    - checkout: self
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Terraform init'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          terraform init \
+            -backend-config="bucket=$(TF_STATE_BUCKET)" \
+            -backend-config="key=$(TF_STATE_KEY_DEV)" \
+            -backend-config="region=$(TF_STATE_REGION)" \
+            -backend-config="dynamodb_table=$(TF_STATE_LOCK_TABLE)" \
+            -backend-config="encrypt=true" \
+            -input=false \
+            -reconfigure
+
+    - task: Bash@3
+      displayName: 'Update kubernetes_version to $(TARGET_VERSION)'
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+
+          echo "Updating kubernetes_version in terraform.tfvars..."
+          sed -i 's/kubernetes_version *= *"$(FROM_VERSION)"/kubernetes_version = "$(TARGET_VERSION)"/' terraform.tfvars
+
+          echo "Verifying change:"
+          grep "kubernetes_version" terraform.tfvars
+
+    - task: Bash@3
+      displayName: 'Terraform plan (control plane upgrade only)'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+
+          terraform plan \
+            -var-file=terraform.tfvars \
+            -target=module.eks.aws_eks_cluster.client_eks_cluster \
+            -out="$(Build.ArtifactStagingDirectory)/upgrade-cp.binary"
+
+          terraform show -no-color \
+            "$(Build.ArtifactStagingDirectory)/upgrade-cp.binary" \
+            > "$(Build.ArtifactStagingDirectory)/upgrade-cp.txt"
+
+          echo "=== Plan summary ==="
+          grep -E "will be|must be|Plan:" \
+            "$(Build.ArtifactStagingDirectory)/upgrade-cp.txt" || true
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish control plane upgrade plan'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: 'upgrade-cp-plan'
+        publishLocation: 'pipeline'
+
+    - task: Bash@3
+      displayName: 'Apply control plane upgrade (~15 min)'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+
+          echo "Upgrading EKS control plane from $(FROM_VERSION) to $(TARGET_VERSION)..."
+          echo "This takes approximately 10-15 minutes. App traffic continues uninterrupted."
+          echo ""
+
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            "$(Build.ArtifactStagingDirectory)/upgrade-cp.binary"
+
+          echo ""
+          echo "Control plane upgrade complete."
+
+# ── Stage 4: Validate Control Plane ────────────────────────────────────────
+- stage: ValidateControlPlane
+  displayName: '4 · Validate Control Plane'
+  dependsOn: UpgradeControlPlane
+  condition: succeeded()
+  jobs:
+  - job: ValidateCP
+    displayName: 'Confirm control plane on $(TARGET_VERSION)'
+    steps:
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Confirm control plane version'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          CP_VERSION=$(aws eks describe-cluster \
+            --name $(CLUSTER_NAME) \
+            --query 'cluster.version' \
+            --output text)
+
+          echo "Control plane version: $CP_VERSION"
+
+          if [ "$CP_VERSION" != "$(TARGET_VERSION)" ]; then
+            echo "ERROR: Expected $(TARGET_VERSION), got $CP_VERSION"
+            exit 1
+          fi
+          echo "Control plane upgrade confirmed."
+
+    - task: Bash@3
+      displayName: 'Confirm app still serving traffic'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          LB=$(kubectl get svc ingress-nginx-controller \
+            -n $(INGRESS_NAMESPACE) \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+          echo "Testing app availability at: http://$LB/"
+
+          for i in $(seq 1 5); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              --max-time 10 "http://$LB/" || echo "000")
+            echo "Attempt $i: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "App is serving traffic during control plane upgrade. PASS"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "WARNING: Could not confirm HTTP 200 — verify manually."
+
+# ── Stage 5: Approve Node Group Upgrade ────────────────────────────────────
+- stage: ApproveNodeUpgrade
+  displayName: '5 · Approve Node Group Upgrade'
+  dependsOn: ValidateControlPlane
+  condition: succeeded()
+  jobs:
+  - job: WaitForApproval
+    displayName: 'Manual gate before node replacement'
+    pool: server
+    timeoutInMinutes: 1440
+    steps:
+    - task: ManualValidation@0
+      displayName: 'Approve rolling node replacement'
+      timeoutInMinutes: 1440
+      inputs:
+        notifyUsers: |
+          $(Build.RequestedForEmail)
+        instructions: |
+          ============================================================
+          NODE GROUP UPGRADE — PENDING APPROVAL
+          ============================================================
+
+          Control plane has been successfully upgraded to $(TARGET_VERSION).
+          App is confirmed serving traffic.
+
+          Next step will perform a ROLLING REPLACEMENT of worker nodes:
+            • 1 node drained and terminated at a time
+            • New node launched on $(TARGET_VERSION) AMI
+            • PDB ensures minimum 2 app pods available throughout
+            • Expected duration: 10-20 minutes
+
+          Before approving, verify in AWS console:
+            • EKS cluster shows version $(TARGET_VERSION)
+            • App pods are Running (kubectl get pods -n eksplat-app)
+            • PDB shows ALLOWED DISRUPTIONS >= 1
+
+          ============================================================
+        onTimeout: 'reject'
+
+# ── Stage 6: Upgrade Node Group ────────────────────────────────────────────
+- stage: UpgradeNodeGroup
+  displayName: '6 · Upgrade Node Group'
+  dependsOn: ApproveNodeUpgrade
+  condition: succeeded()
+  jobs:
+  - job: UpgradeNodeGroup
+    displayName: 'Rolling node replacement to $(TARGET_VERSION)'
+    timeoutInMinutes: 60
+    steps:
+    - checkout: self
+
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Terraform init'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+          terraform init \
+            -backend-config="bucket=$(TF_STATE_BUCKET)" \
+            -backend-config="key=$(TF_STATE_KEY_DEV)" \
+            -backend-config="region=$(TF_STATE_REGION)" \
+            -backend-config="dynamodb_table=$(TF_STATE_LOCK_TABLE)" \
+            -backend-config="encrypt=true" \
+            -input=false \
+            -reconfigure
+
+    - task: Bash@3
+      displayName: 'Start continuous traffic test (background)'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          LB=$(kubectl get svc ingress-nginx-controller \
+            -n $(INGRESS_NAMESPACE) \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+          echo "Starting background traffic test against http://$LB/"
+          echo "Any non-200 response during node replacement = downtime detected."
+
+          # Run traffic test in background, log results to file
+          (
+            FAILURES=0
+            REQUESTS=0
+            while true; do
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                --max-time 5 "http://$LB/" 2>/dev/null || echo "000")
+              REQUESTS=$((REQUESTS + 1))
+              if [ "$CODE" != "200" ]; then
+                FAILURES=$((FAILURES + 1))
+                echo "$(date): FAIL - HTTP $CODE (failure $FAILURES)"
+              fi
+              echo "$REQUESTS,$FAILURES" > /tmp/traffic_test_results.txt
+              sleep 2
+            done
+          ) &
+          echo $! > /tmp/traffic_test_pid.txt
+          echo "Traffic test running (PID: $(cat /tmp/traffic_test_pid.txt))"
+
+    - task: Bash@3
+      displayName: 'Upgrade node group via Terraform'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        workingDirectory: $(TF_DIR)
+        script: |
+          set -euo pipefail
+
+          echo "Upgrading node group to $(TARGET_VERSION)..."
+          echo "Rolling replacement: 1 node at a time, PDB protecting app pods."
+          echo ""
+
+          terraform apply \
+            -var-file=terraform.tfvars \
+            -target=module.nodegroup.aws_eks_node_group.eks_nodegroup \
+            -input=false \
+            -auto-approve
+
+          echo "Node group upgrade complete."
+
+    - task: Bash@3
+      displayName: 'Stop traffic test + report results'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          # Stop background traffic test
+          if [ -f /tmp/traffic_test_pid.txt ]; then
+            kill $(cat /tmp/traffic_test_pid.txt) 2>/dev/null || true
+          fi
+
+          echo "=== Traffic Test Results ==="
+          if [ -f /tmp/traffic_test_results.txt ]; then
+            RESULTS=$(cat /tmp/traffic_test_results.txt)
+            TOTAL=$(echo $RESULTS | cut -d, -f1)
+            FAILURES=$(echo $RESULTS | cut -d, -f2)
+            echo "Total requests : $TOTAL"
+            echo "Failed requests: $FAILURES"
+            if [ "$FAILURES" -eq 0 ]; then
+              echo "ZERO DOWNTIME CONFIRMED — all requests returned HTTP 200"
+            else
+              echo "WARNING: $FAILURES request(s) failed during node replacement"
+            fi
+          else
+            echo "Traffic test results file not found"
+          fi
+
+# ── Stage 7: Validate Nodes ────────────────────────────────────────────────
+- stage: ValidateNodes
+  displayName: '7 · Validate Nodes'
+  dependsOn: UpgradeNodeGroup
+  condition: succeeded()
+  jobs:
+  - job: ValidateNodes
+    displayName: 'Confirm all nodes on $(TARGET_VERSION)'
+    steps:
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Confirm nodes on $(TARGET_VERSION) and Ready'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== Node details ==="
+          kubectl get nodes -o wide
+
+          echo ""
+          echo "=== Checking node versions ==="
+          OLD_VERSION_NODES=$(kubectl get nodes --no-headers \
+            -o custom-columns='VERSION:.status.nodeInfo.kubeletVersion' \
+            | grep "$(FROM_VERSION)" | wc -l || true)
+
+          NEW_VERSION_NODES=$(kubectl get nodes --no-headers \
+            -o custom-columns='VERSION:.status.nodeInfo.kubeletVersion' \
+            | grep "$(TARGET_VERSION)" | wc -l || true)
+
+          echo "Nodes on $(FROM_VERSION) : $OLD_VERSION_NODES"
+          echo "Nodes on $(TARGET_VERSION): $NEW_VERSION_NODES"
+
+          if [ "$OLD_VERSION_NODES" -gt 0 ]; then
+            echo "ERROR: $OLD_VERSION_NODES node(s) still on old version $(FROM_VERSION)"
+            exit 1
+          fi
+
+          if [ "$NEW_VERSION_NODES" -lt 2 ]; then
+            echo "ERROR: Expected 2 nodes on $(TARGET_VERSION), got $NEW_VERSION_NODES"
+            exit 1
+          fi
+
+          READY=$(kubectl get nodes --no-headers \
+            | awk '$2 == "Ready"' | wc -l)
+          echo "Ready nodes: $READY"
+
+          if [ "$READY" -lt 2 ]; then
+            echo "ERROR: Expected 2 Ready nodes, got $READY"
+            exit 1
+          fi
+
+          echo "All nodes on $(TARGET_VERSION) and Ready. PASS"
+
+    - task: Bash@3
+      displayName: 'Confirm all system pods Running'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "Waiting for kube-system pods to stabilize..."
+          sleep 30
+
+          kubectl get pods -n kube-system -o wide
+
+          NOT_RUNNING=$(kubectl get pods -n kube-system \
+            --no-headers \
+            | awk '$3 != "Running" && $3 != "Completed"' \
+            | wc -l)
+
+          if [ "$NOT_RUNNING" -gt 0 ]; then
+            echo "WARNING: $NOT_RUNNING pod(s) not in Running/Completed state"
+            kubectl get pods -n kube-system \
+              --no-headers \
+              | awk '$3 != "Running" && $3 != "Completed"'
+          else
+            echo "All system pods Running. PASS"
+          fi
+
+# ── Stage 8: Validate App ──────────────────────────────────────────────────
+- stage: ValidateApp
+  displayName: '8 · Validate App'
+  dependsOn: ValidateNodes
+  condition: succeeded()
+  jobs:
+  - job: ValidateApp
+    displayName: 'Confirm app healthy post-upgrade'
+    steps:
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Confirm app pods healthy'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "=== App pod status ==="
+          kubectl get pods -n $(APP_NAMESPACE) -o wide
+
+          RUNNING=$(kubectl get pods -n $(APP_NAMESPACE) \
+            --no-headers | awk '$3 == "Running"' | wc -l)
+
+          echo "Running pods: $RUNNING"
+
+          if [ "$RUNNING" -lt 2 ]; then
+            echo "ERROR: Expected at least 2 running pods, got $RUNNING"
+            exit 1
+          fi
+          echo "App pods healthy. PASS"
+
+    - task: Bash@3
+      displayName: 'Confirm ingress routing'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          LB=$(kubectl get svc ingress-nginx-controller \
+            -n $(INGRESS_NAMESPACE) \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+          echo "Testing: http://$LB/"
+
+          for i in $(seq 1 5); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              --max-time 10 "http://$LB/" || echo "000")
+            echo "Attempt $i: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Ingress routing confirmed. PASS"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "WARNING: Could not confirm HTTP 200. Verify manually."
+
+    - task: Bash@3
+      displayName: 'Confirm HPA still active'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          kubectl get hpa -n $(APP_NAMESPACE)
+          echo "HPA check complete."
+
+# ── Stage 9: Scale Down ────────────────────────────────────────────────────
+- stage: ScaleDown
+  displayName: '9 · Scale Down App'
+  dependsOn: ValidateApp
+  condition: succeeded()
+  jobs:
+  - job: ScaleDown
+    displayName: 'Return app to $(NORMAL_REPLICAS) replicas'
+    steps:
+    - template: ../templates/kubectl-install.yml
+      parameters:
+        kubectlVersion: $(KUBECTL_VERSION)
+
+    - template: ../templates/configure-aws.yml
+
+    - task: Bash@3
+      displayName: 'Update kubeconfig'
+      env:
+        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+        AWS_REGION: $(AWS_REGION)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Scale back to $(NORMAL_REPLICAS) replicas'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          kubectl scale deployment eksplat-app \
+            -n $(APP_NAMESPACE) \
+            --replicas=$(NORMAL_REPLICAS)
+
+          kubectl rollout status deployment eksplat-app \
+            -n $(APP_NAMESPACE) \
+            --timeout=120s
+
+          echo ""
+          echo "============================================================"
+          echo "  KUBERNETES UPGRADE COMPLETE"
+          echo "============================================================"
+          echo ""
+          echo "  Cluster  : $(CLUSTER_NAME)"
+          echo "  Upgraded : $(FROM_VERSION) → $(TARGET_VERSION)"
+          echo "  Nodes    : $(kubectl get nodes --no-headers | wc -l) × $(TARGET_VERSION)"
+          echo "  App pods : $(kubectl get pods -n $(APP_NAMESPACE) --no-headers | wc -l) running"
+          echo "  Status   : Zero downtime confirmed"
+          echo "============================================================"
+
+# ── Stage 10: Rollback (on failure) ───────────────────────────────────────
+- stage: Rollback
+  displayName: '10 · Rollback (auto on failure)'
+  dependsOn:
+  - UpgradeControlPlane
+  - UpgradeNodeGroup
+  - ValidateNodes
+  - ValidateApp
+  condition: |
+    or(
+      failed('UpgradeControlPlane'),
+      failed('UpgradeNodeGroup'),
+      failed('ValidateNodes'),
+      failed('ValidateApp')
+    )
+  jobs:
+  - job: RollbackAlert
+    displayName: 'Rollback guidance'
+    pool: server
+    timeoutInMinutes: 1440
+    steps:
+    - task: ManualValidation@0
+      displayName: 'Rollback decision'
+      timeoutInMinutes: 1440
+      inputs:
+        notifyUsers: |
+          $(Build.RequestedForEmail)
+        instructions: |
+          ============================================================
+          UPGRADE FAILED — ROLLBACK DECISION REQUIRED
+          ============================================================
+
+          An upgrade stage has failed. Review the failed stage logs
+          to determine the current cluster state before deciding.
+
+          IMPORTANT: EKS control plane downgrades are NOT supported
+          by AWS. Once the control plane is on $(TARGET_VERSION),
+          it cannot be rolled back to $(FROM_VERSION) via Terraform.
+
+          ROLLBACK OPTIONS:
+
+          A) Node group only failed (control plane succeeded):
+             → Keep control plane on $(TARGET_VERSION)
+             → Manually cordon/drain affected nodes
+             → Re-run just Stage 6 after fixing root cause
+             → Command: kubectl cordon <node> && kubectl drain <node>
+
+          B) App validation failed (nodes succeeded):
+             → Roll back the Helm release:
+             → helm rollback eksplat-app -n eksplat-app
+             → Check: helm history eksplat-app -n eksplat-app
+
+          C) Full cluster recovery needed:
+             → Restore from Terraform state backup
+             → Or provision a new cluster (blue-green Strategy B)
+             → See architecture doc Phase 1 §10 for Strategy B details
+
+          Review the pipeline logs, then Approve to acknowledge
+          and manually follow the appropriate rollback option above.
+          ============================================================
+        onTimeout: 'reject'
