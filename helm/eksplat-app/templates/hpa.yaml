@@ -1,6 +1,6 @@
 {{- if .Values.hpa.enabled -}}
 apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscalar
+kind: HorizontalPodAutoscaler
 metadata:
   name: {{ include "eksplat-app.fullname" . }}
   namespace: {{ .Release.Namespace }}
