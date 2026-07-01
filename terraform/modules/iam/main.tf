@@ -83,6 +83,15 @@ resource "aws_iam_role_policy_attachment" "node_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Required for the aws-ebs-csi-driver addon to perform EC2 storage operations
+# (DescribeAvailabilityZones, CreateVolume, AttachVolume, etc.) via the node
+# instance role. Long-term: replace with a dedicated IRSA role scoped only to
+# EBS CSI permissions (Phase 11 hardening item).
+resource "aws_iam_role_policy_attachment" "node_ebs_csi" {
+  role       = aws_iam_role.node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
 resource "aws_iam_instance_profile" "node_instanceprof" {
   name = "${var.project_name}-${var.environment}-eks-node-profile"
   role = aws_iam_role.node_role.name
