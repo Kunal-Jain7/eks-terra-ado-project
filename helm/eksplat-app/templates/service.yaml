@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "eksplat-app.filename" . }}
+  name: {{ include "eksplat-app.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "eksplat-app.lables" . | indent 4 }}
+    {{- include "eksplat-app.labels" . | indent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
