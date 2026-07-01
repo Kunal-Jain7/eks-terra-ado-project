@@ -1,5 +1,5 @@
 # ── Network ──────────────────────────────────────────────────────────────────
-
+/*
 output "vpc_id" {
   value = module.network.vpc_id
 }
@@ -116,3 +116,4 @@ output "dasboard_url" {
   description = "Open this URL in your browser to view the cluster health dashboard"
   value       = module.monitoring.dashboard_url
 }
+*/
