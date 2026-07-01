@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "eksplat-app.filename" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "eksplat-app.lables" . | indent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "eksplat-app.selectorLabels" . | nindent 4 }}

@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "eksplat-app.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "eksplat-app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "eksplat-app.selectorLables" . | nindent 6 }}
+    strategy: 
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 0
+    template:
+      metadata:
+        labels:
+          {{- include "eksplat-app.selectorLabels" . | nindent 8 }}
+          {{- with .Values.podLables }}
+          {{- toYaml . | nindent 8 }}
+        annotations:
+          {{- toYaml .Values.podAnnotations | nindent 8 }}
+      spec:
+        terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+        {{- with .Values.nodeSelector }}
+        nodeSelector:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Value.affinity }}
+        affinity:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.tolerations }}
+        tolerations:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.topologySpreadConstraints }}
+        topologySpreadSonstraints:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        containers:
+          - name: {{ .Chart.Name }}
+            image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            ports:
+              - name: http
+                containerPort: {{ .Values.service.targetPort }}
+                protocol: TCP
+            {{- with .Values.readinessProbe }}
+            readinessProbe:
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.livenessProbe }}
+            livenessProbe:
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+            resources:
+              {{- toYaml .Values.resources | nindent 12 }}
+            {{- if .Values.configMap.enabled }}
+            volumeMounts:
+              - name: html-content
+                mountPath: /usr/share/nginx/html/index.html
+                subPath: index.html
+            {{- end }}
+        {{- if .Values.configMap.enabled }}
+        volumes:
+          - name: html-content
+            configMap:
+              name: {{ include "eksplat-app.fullname" . }}-html
+        {{- end }}
+              

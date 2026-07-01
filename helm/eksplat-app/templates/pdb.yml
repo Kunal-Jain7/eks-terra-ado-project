@@ -1,0 +1,14 @@
+{{- if .Values.pdb.enabled}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "eksplat-app.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "eksplat-app.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "eksplat-app.selectorLabels" . | nindent 6 }}
+{{- end }}
