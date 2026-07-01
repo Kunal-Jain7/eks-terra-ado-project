@@ -4,7 +4,7 @@ metadata:
   name: {{ include "eksplat-app.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "eksplat-app.labels" . | indent 4 }}
+    {{- include "eksplat-app.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
