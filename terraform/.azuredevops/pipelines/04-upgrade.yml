@@ -490,6 +490,10 @@ stages:
     steps:
     - checkout: self
 
+    - template: ../templates/terraform-install.yml
+      parameters:
+        terraformVersion: $(TF_VERSION)
+
     - template: ../templates/kubectl-install.yml
       parameters:
         kubectlVersion: $(KUBECTL_VERSION)
@@ -507,6 +511,100 @@ stages:
         script: |
           set -euo pipefail
           aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
+
+    - task: Bash@3
+      displayName: 'Uncordon any stuck cordoned nodes'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          # If a previous failed drain attempt left a node cordoned,
+          # uncordon it so pods can reschedule before we scale up
+          CORDONED=$(kubectl get nodes --no-headers \
+            | grep "SchedulingDisabled" \
+            | awk '{print $1}' || true)
+
+          if [ -n "$CORDONED" ]; then
+            echo "Found cordoned node(s): $CORDONED"
+            for NODE in $CORDONED; do
+              echo "Uncordoning $NODE..."
+              kubectl uncordon $NODE
+            done
+            echo "Waiting 10s for scheduler to settle..."
+            sleep 10
+          else
+            echo "No cordoned nodes found."
+          fi
+
+    - task: Bash@3
+      displayName: 'Delete blocking PDBs'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          # Delete ebs-csi-controller PDB if it exists and has 0 allowed disruptions
+          if kubectl get pdb ebs-csi-controller -n kube-system &>/dev/null; then
+            ALLOWED=$(kubectl get pdb ebs-csi-controller -n kube-system \
+              -o jsonpath='{.status.disruptionsAllowed}')
+            if [ "$ALLOWED" = "0" ]; then
+              echo "ebs-csi-controller PDB has 0 allowed disruptions — deleting..."
+              kubectl delete pdb ebs-csi-controller -n kube-system
+            else
+              echo "ebs-csi-controller PDB OK (disruptions allowed: $ALLOWED)"
+            fi
+          else
+            echo "ebs-csi-controller PDB not found — skipping."
+          fi
+
+    - task: Bash@3
+      displayName: 'Scale app to $(UPGRADE_REPLICAS) replicas with even distribution'
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          echo "Scaling eksplat-app to $(UPGRADE_REPLICAS) replicas..."
+          kubectl scale deployment eksplat-app \
+            -n $(APP_NAMESPACE) \
+            --replicas=$(UPGRADE_REPLICAS)
+
+          kubectl rollout status deployment eksplat-app \
+            -n $(APP_NAMESPACE) --timeout=180s
+
+          echo "=== Pod distribution after scale ==="
+          kubectl get pods -n $(APP_NAMESPACE) -o wide
+
+          # Check PDB allows disruptions
+          DISRUPTIONS=$(kubectl get pdb -n $(APP_NAMESPACE) eksplat-app \
+            -o jsonpath='{.status.disruptionsAllowed}')
+          echo "PDB disruptions allowed: $DISRUPTIONS"
+
+          # If distribution is uneven and disruptions are too low, scale higher
+          if [ "$DISRUPTIONS" -lt 2 ]; then
+            echo "Not enough PDB headroom — scaling to $(($(UPGRADE_REPLICAS) + 2)) replicas..."
+            kubectl scale deployment eksplat-app \
+              -n $(APP_NAMESPACE) \
+              --replicas=$(($(UPGRADE_REPLICAS) + 2))
+
+            kubectl rollout status deployment eksplat-app \
+              -n $(APP_NAMESPACE) --timeout=180s
+
+            echo "=== Pod distribution after extra scale ==="
+            kubectl get pods -n $(APP_NAMESPACE) -o wide
+
+            DISRUPTIONS=$(kubectl get pdb -n $(APP_NAMESPACE) eksplat-app \
+              -o jsonpath='{.status.disruptionsAllowed}')
+            echo "PDB disruptions allowed after scale: $DISRUPTIONS"
+
+            if [ "$DISRUPTIONS" -lt 2 ]; then
+              echo "ERROR: Still not enough PDB headroom. Manual intervention needed."
+              exit 1
+            fi
+          fi
+
+          echo "Safe to proceed with node group upgrade."
 
     - task: Bash@3
       displayName: 'Terraform init'
@@ -540,9 +638,7 @@ stages:
             -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
           echo "Starting background traffic test against http://$LB/"
-          echo "Any non-200 response during node replacement = downtime detected."
 
-          # Run traffic test in background, log results to file
           (
             FAILURES=0
             REQUESTS=0
@@ -560,23 +656,6 @@ stages:
           ) &
           echo $! > /tmp/traffic_test_pid.txt
           echo "Traffic test running (PID: $(cat /tmp/traffic_test_pid.txt))"
-
-    - task: Bash@3
-      displayName: 'Delete ebs-csi-controller PDB (allows node drain)'
-      inputs:
-        targetType: inline
-        script: |
-          # The ebs-csi-controller PDB blocks node drain when its pods are
-          # unhealthy (ALLOWED DISRUPTIONS: 0). Deleting it here is safe —
-          # the EKS addon controller recreates it automatically once pods
-          # are healthy on the new nodes.
-          if kubectl get pdb ebs-csi-controller -n kube-system &>/dev/null; then
-            echo "Deleting ebs-csi-controller PDB to allow node drain..."
-            kubectl delete pdb ebs-csi-controller -n kube-system
-            echo "PDB deleted."
-          else
-            echo "ebs-csi-controller PDB not found — skipping."
-          fi
 
     - task: Bash@3
       displayName: 'Upgrade node group via Terraform'
@@ -609,7 +688,6 @@ stages:
         script: |
           set -euo pipefail
 
-          # Stop background traffic test
           if [ -f /tmp/traffic_test_pid.txt ]; then
             kill $(cat /tmp/traffic_test_pid.txt) 2>/dev/null || true
           fi
@@ -626,8 +704,6 @@ stages:
             else
               echo "WARNING: $FAILURES request(s) failed during node replacement"
             fi
-          else
-            echo "Traffic test results file not found"
           fi
 
 # ── Stage 7: Validate Nodes ────────────────────────────────────────────────
