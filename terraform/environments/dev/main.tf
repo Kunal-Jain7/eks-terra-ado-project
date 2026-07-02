@@ -1,4 +1,4 @@
-/*module "network" {
+module "network" {
   source = "../../modules/network"
 
   project_name         = var.project_name
@@ -68,6 +68,7 @@ module "nodegroup" {
   min_size               = var.node_min_size
   ebs_kms_key_arn        = module.security.ebs_kms_key_arn
   tags                   = var.tags
+  kubernetes_version     = var.kubernetes_version
 }
 
 module "monitoring" {
@@ -88,4 +89,4 @@ module "monitoring" {
 
   tags = var.tags
 }
-*/
+

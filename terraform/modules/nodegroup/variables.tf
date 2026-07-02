@@ -109,3 +109,8 @@ variable "node_labels" {
   default     = {}
   description = "Additional Kubernetes node labels to apply to all nodes in this group"
 }
+
+variable "kubernetes_version" {
+  type        = string
+  description = "Kubernetes version for the node group. Must match the EKS cluster version. Update this together with the cluster version when upgrading."
+}

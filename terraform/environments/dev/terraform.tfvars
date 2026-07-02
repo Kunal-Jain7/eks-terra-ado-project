@@ -32,7 +32,7 @@ admin_access_cidrs = []
 
 # ── EKS cluster ───────────────────────────────────────────────────────────────
 cluster_name       = "eksplat-dev-eks"
-kubernetes_version = "1.31"
+kubernetes_version = "1.30"
 
 # dev: public+private endpoint; lock to private-only for prod
 endpoint_public_access = true

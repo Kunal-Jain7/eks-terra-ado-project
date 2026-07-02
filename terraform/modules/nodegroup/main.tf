@@ -87,7 +87,12 @@ resource "aws_eks_node_group" "eks_nodegroup" {
 
   instance_types = [var.instance_type]
 
-  version = "1.31"
+  # Explicit Kubernetes version — must match the cluster's kubernetes_version.
+  # Without this field, Terraform sees "no changes" during an upgrade even
+  # though nodes are still running the old kubelet version. Setting this
+  # explicitly ensures Terraform drives a rolling node replacement whenever
+  # kubernetes_version changes in terraform.tfvars.
+  version = var.kubernetes_version
 
   launch_template {
     id      = aws_launch_template.eks_nodes.id
