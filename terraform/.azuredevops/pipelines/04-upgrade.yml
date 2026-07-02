@@ -562,6 +562,23 @@ stages:
           echo "Traffic test running (PID: $(cat /tmp/traffic_test_pid.txt))"
 
     - task: Bash@3
+      displayName: 'Delete ebs-csi-controller PDB (allows node drain)'
+      inputs:
+        targetType: inline
+        script: |
+          # The ebs-csi-controller PDB blocks node drain when its pods are
+          # unhealthy (ALLOWED DISRUPTIONS: 0). Deleting it here is safe —
+          # the EKS addon controller recreates it automatically once pods
+          # are healthy on the new nodes.
+          if kubectl get pdb ebs-csi-controller -n kube-system &>/dev/null; then
+            echo "Deleting ebs-csi-controller PDB to allow node drain..."
+            kubectl delete pdb ebs-csi-controller -n kube-system
+            echo "PDB deleted."
+          else
+            echo "ebs-csi-controller PDB not found — skipping."
+          fi
+
+    - task: Bash@3
       displayName: 'Upgrade node group via Terraform'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
