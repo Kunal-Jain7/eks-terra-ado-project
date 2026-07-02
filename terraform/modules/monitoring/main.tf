@@ -86,7 +86,7 @@ resource "aws_kms_alias" "cloudwatch_alias" {
 # shows "already exists" on first apply, import it first:
 #   terraform import module.monitoring.aws_cloudwatch_log_group.eks_control_plane \
 #     /aws/eks/<cluster_name>/cluster
-
+/*
 resource "aws_cloudwatch_log_group" "eks_control_plane_loggroup" {
   name              = "/aws/eks/${var.cluster_name}/cluster"
   retention_in_days = var.log_retention_days
@@ -96,6 +96,7 @@ resource "aws_cloudwatch_log_group" "eks_control_plane_loggroup" {
     Name = "${local.name_prefix}-eks-control-plane-logs"
   })
 }
+*/
 
 # Container Insights log group (performance metrics and container logs)
 resource "aws_cloudwatch_log_group" "container_insights" {

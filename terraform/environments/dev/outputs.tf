@@ -1,5 +1,5 @@
 # ── Network ──────────────────────────────────────────────────────────────────
-/*
+
 output "vpc_id" {
   value = module.network.vpc_id
 }
@@ -99,11 +99,11 @@ output "kubeconfig_command" {
 }
 
 # ── Monitoring ────────────────────────────────────────────────────────────────
-
+/*
 output "control_plane_log_group_name" {
   value = module.monitoring.control_plane_log_group_name
 }
-
+*/
 output "container_insights_log_group_name" {
   value = module.monitoring.container_insights_log_group_name
 }
@@ -116,4 +116,3 @@ output "dasboard_url" {
   description = "Open this URL in your browser to view the cluster health dashboard"
   value       = module.monitoring.dashboard_url
 }
-*/

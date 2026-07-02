@@ -4,12 +4,12 @@ output "cloudwatch_kms_key_arn" {
   value       = aws_kms_key.cloudwatch.arn
   description = "ARN of the KMS key used to encrypt CloudWatch log groups"
 }
-
+/*
 output "control_plane_log_group_name" {
   value       = aws_cloudwatch_log_group.eks_control_plane_loggroup.name
   description = "CloudWatch log group name for EKS control plane logs"
 }
-
+*/
 output "container_insights_log_group_name" {
   value       = aws_cloudwatch_log_group.container_insights.name
   description = "CloudWatch log group name for Container Insights performance metrics"

@@ -282,39 +282,6 @@ stages:
             -reconfigure
 
     - task: Bash@3
-      displayName: 'Import control-plane log group (idempotency guard)'
-      env:
-        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-        AWS_REGION: $(AWS_REGION)
-      inputs:
-        targetType: inline
-        workingDirectory: $(TF_DIR)
-        script: |
-          set -euo pipefail
-
-          # EKS auto-creates /aws/eks/<cluster>/cluster when the cluster
-          # enables control-plane logging. If the log group already exists
-          # (e.g. on a re-run) Terraform will fail on create. We import it
-          # first so Terraform knows it already exists and just updates
-          # retention/encryption on top. Safe to run even on first apply
-          # (import will simply fail silently if the group doesn't exist yet).
-
-          LOG_GROUP="/aws/eks/$(CLUSTER_NAME)/cluster"
-
-          if aws logs describe-log-groups \
-            --log-group-name-prefix "$LOG_GROUP" \
-            --query "logGroups[?logGroupName=='$LOG_GROUP'].logGroupName" \
-            --output text | grep -q "$LOG_GROUP"; then
-            echo "Log Group $LOG_GROUP exists - importing into state..."
-            terraform import \
-              module.monitoring.aws_cloudwatch_log_group.eks_control_plane_loggroup \
-              "$LOG_GROUP" || true
-          else
-            echo "Log Group does not exists yet - skipping import"
-          fi
-
-    - task: Bash@3
       displayName: 'Terraform apply'
       env:
         AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
