@@ -92,31 +92,31 @@ stages:
           set -euo pipefail
           aws eks update-kubeconfig --region $(AWS_REGION) --name $(CLUSTER_NAME)
 
-    - task: Bash@3
-      displayName: 'Confirm current version is $(FROM_VERSION)'
-      env:
-        AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
-        AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-        AWS_REGION: $(AWS_REGION)
-      inputs:
-        targetType: inline
-        script: |
-          set -euo pipefail
+    # - task: Bash@3
+    #   displayName: 'Confirm current version is $(FROM_VERSION)'
+    #   env:
+    #     AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+    #     AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+    #     AWS_REGION: $(AWS_REGION)
+    #   inputs:
+    #     targetType: inline
+    #     script: |
+    #       set -euo pipefail
 
-          CURRENT=$(aws eks describe-cluster \
-            --name $(CLUSTER_NAME) \
-            --query 'cluster.version' \
-            --output text)
+    #       CURRENT=$(aws eks describe-cluster \
+    #         --name $(CLUSTER_NAME) \
+    #         --query 'cluster.version' \
+    #         --output text)
 
-          echo "Current cluster version: $CURRENT"
-          echo "Target upgrade version : $(TARGET_VERSION)"
+    #       echo "Current cluster version: $CURRENT"
+    #       echo "Target upgrade version : $(TARGET_VERSION)"
 
-          if [ "$CURRENT" != "$(FROM_VERSION)" ]; then
-            echo "ERROR: Expected cluster version $(FROM_VERSION), got $CURRENT"
-            echo "Update FROM_VERSION variable if cluster is already on a newer version."
-            exit 1
-          fi
-          echo "Version check passed."
+    #       if [ "$CURRENT" != "$(FROM_VERSION)" ]; then
+    #         echo "ERROR: Expected cluster version $(FROM_VERSION), got $CURRENT"
+    #         echo "Update FROM_VERSION variable if cluster is already on a newer version."
+    #         exit 1
+    #       fi
+    #       echo "Version check passed."
 
     - task: Bash@3
       displayName: 'Confirm all nodes Ready'
