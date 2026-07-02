@@ -490,10 +490,6 @@ stages:
     steps:
     - checkout: self
 
-    - template: ../templates/terraform-install.yml
-      parameters:
-        terraformVersion: $(TF_VERSION)
-
     - template: ../templates/kubectl-install.yml
       parameters:
         kubectlVersion: $(KUBECTL_VERSION)
